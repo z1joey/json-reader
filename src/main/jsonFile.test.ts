@@ -133,12 +133,16 @@ describe('search', () => {
     const result = await file.search('apple')
     expect(result).toEqual({
       hits: [
-        { index: 3, tier: 1, field: 'word', snippet: expect.any(String) },
-        { index: 1, tier: 2, field: 'word', snippet: expect.any(String) },
-        { index: 2, tier: 3, field: 'note', snippet: expect.any(String) }
+        { index: 3, tier: 1, field: 'word', snippet: expect.any(String), matchStart: expect.any(Number), matchLength: 5 },
+        { index: 1, tier: 2, field: 'word', snippet: expect.any(String), matchStart: expect.any(Number), matchLength: 5 },
+        { index: 2, tier: 3, field: 'note', snippet: expect.any(String), matchStart: expect.any(Number), matchLength: 5 }
       ],
       moreAvailable: false
     })
+    if (result === null) throw new Error('search unexpectedly canceled')
+    for (const hit of result.hits) {
+      expect(hit.snippet.slice(hit.matchStart, hit.matchStart + hit.matchLength).toLowerCase()).toBe('apple')
+    }
     await file.close()
   })
 
@@ -190,6 +194,25 @@ describe('search', () => {
     expect(result.hits[0].index).toBe(0)
     expect(result.hits[0].snippet).toContain(emoji)
     expect(result.hits[0].snippet).not.toContain('\uFFFD')
+    await file.close()
+  })
+
+  it('reports match offsets that line up with the query inside the snippet', async () => {
+    const file = await JsonFile.open(await fixture('search-offset.json', JSON.stringify([{ body: 'a tiny apple sits here' }])))
+    const result = await file.search('Apple')
+    expect(result).toEqual({
+      hits: [
+        {
+          index: 0,
+          tier: 3,
+          field: 'body',
+          snippet: '{"body":"a tiny apple sits here"}',
+          matchStart: 16,
+          matchLength: 5
+        }
+      ],
+      moreAvailable: false
+    })
     await file.close()
   })
 

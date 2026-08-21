@@ -138,14 +138,23 @@ function skipWhitespaceBack(text: string, from: number): number {
 }
 
 /** A one-line excerpt around a match, ellipsized on both sides as needed. */
-function makeSnippet(text: string, at: number, length: number): string {
+function makeSnippet(text: string, at: number, length: number): {
+  snippet: string
+  matchStart: number
+  matchLength: number
+} {
   let start = Math.max(0, at - SNIPPET_RADIUS)
   let end = Math.min(text.length, at + length + SNIPPET_RADIUS)
   // Do not cut a surrogate pair in half at either edge.
   if (start > 0 && text.charCodeAt(start) >= 0xdc00 && text.charCodeAt(start) <= 0xdfff) start--
   if (end < text.length && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--
-  const body = text.slice(start, end).replace(/\s+/g, ' ').trim()
-  return `${start > 0 ? '…' : ''}${body}${end < text.length ? '…' : ''}`
+  const collapse = (part: string): string => part.replace(/\s+/g, ' ')
+  const lead = start > 0 ? '…' : ''
+  const tail = end < text.length ? '…' : ''
+  const before = collapse(text.slice(start, at)).trimStart()
+  const mid = collapse(text.slice(at, at + length))
+  const after = collapse(text.slice(at + length, end)).trimEnd()
+  return { snippet: lead + before + mid + after + tail, matchStart: lead.length + before.length, matchLength: mid.length }
 }
 
 /**
@@ -244,7 +253,7 @@ export class JsonFile {
           index,
           tier: classifyMatch(text, at, needle.length),
           field: enclosingField(text, at),
-          snippet: makeSnippet(text, at, needle.length)
+          ...makeSnippet(text, at, needle.length)
         })
       }
       if (verified.length >= SEARCH_LIMIT) return { hits: verified.slice(0, SEARCH_LIMIT), moreAvailable: true }
@@ -287,7 +296,7 @@ export class JsonFile {
           index: pick.index,
           tier: pick.tier,
           field: enclosingField(text, pick.at),
-          snippet: makeSnippet(text, pick.at, needle.length)
+          ...makeSnippet(text, pick.at, needle.length)
         }
       })
     )

@@ -61,6 +61,7 @@ body {
 /* ── Chrome ─────────────────────────────────────────────────────────── */
 
 .header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -103,10 +104,13 @@ body {
 
 /* ── Search ─────────────────────────────────────────────────────────── */
 
+/* The search field floats dead-center in the header, above the drag region. */
 .header-search {
-  position: relative;
-  flex: 0 1 380px;
-  margin-left: auto;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(400px, 42vw);
   -webkit-app-region: no-drag;
 }
 
@@ -218,6 +222,13 @@ body {
 
 .search-hit.exact .search-snippet {
   font-weight: 600;
+}
+
+.search-snippet mark {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
 }
 
 .search-index {

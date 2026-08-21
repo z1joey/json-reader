@@ -11,6 +11,20 @@ type Props = {
 
 const TIER_LABEL: Record<SearchTier, string> = { 1: 'exact', 2: 'starts', 3: 'text' }
 
+function HighlightedSnippet({ hit }: { hit: SearchHit }): React.ReactElement {
+  const { snippet, matchStart, matchLength } = hit
+  if (matchLength <= 0 || matchStart < 0 || matchStart + matchLength > snippet.length) {
+    return <>{snippet}</>
+  }
+  return (
+    <>
+      {snippet.slice(0, matchStart)}
+      <mark>{snippet.slice(matchStart, matchStart + matchLength)}</mark>
+      {snippet.slice(matchStart + matchLength)}
+    </>
+  )
+}
+
 export default function SearchBar({ inputRef, onSelect }: Props): React.ReactElement {
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -131,7 +145,9 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
                   <span className={`search-tier t${hit.tier}`}>{TIER_LABEL[hit.tier]}</span>
                   <span className="search-main">
                     {hit.field && <span className="search-field">{hit.field}</span>}
-                    <span className="search-snippet">{hit.snippet}</span>
+                    <span className="search-snippet">
+                      <HighlightedSnippet hit={hit} />
+                    </span>
                   </span>
                   <span className="search-index">#{(hit.index + 1).toLocaleString()}</span>
                 </li>

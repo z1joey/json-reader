@@ -25,6 +25,10 @@ export type SearchHit = {
   field: string | null
   /** Short excerpt of the element's raw text around the first match. */
   snippet: string
+  /** Offset of the matched query inside `snippet`, for highlighting. */
+  matchStart: number
+  /** Length of the matched query inside `snippet`. */
+  matchLength: number
 }
 
 export type SearchResponse =
