@@ -118,6 +118,138 @@ describe('array roots', () => {
   })
 })
 
+describe('search', () => {
+  it('finds matches and ranks exact values above prefixes above substrings', async () => {
+    const path = await fixture(
+      'search-rank.json',
+      JSON.stringify([
+        { word: 'fig' },
+        { word: 'apple pie' },
+        { note: 'I like apples a lot' },
+        { word: 'apple' }
+      ])
+    )
+    const file = await JsonFile.open(path)
+    const result = await file.search('apple')
+    expect(result).toEqual({
+      hits: [
+        { index: 3, tier: 1, field: 'word', snippet: expect.any(String) },
+        { index: 1, tier: 2, field: 'word', snippet: expect.any(String) },
+        { index: 2, tier: 3, field: 'note', snippet: expect.any(String) }
+      ],
+      moreAvailable: false
+    })
+    await file.close()
+  })
+
+  it('matches case-insensitively', async () => {
+    const file = await JsonFile.open(await fixture('search-case.json', '[{"w":"Apple"},{"w":"APPLE"},{"w":"apples"}]'))
+    const result = (await file.search('apple')) as { hits: Array<{ index: number; tier: number }> }
+    expect(result.hits.map((h) => h.index)).toEqual([0, 1, 2])
+    expect(result.hits.map((h) => h.tier)).toEqual([1, 1, 2])
+    await file.close()
+  })
+
+  it('respects the limit of ten hits and reports more availability', async () => {
+    const items = Array.from({ length: 25 }, (_, i) => ({ id: i, text: `contains apple number ${i}` }))
+    const file = await JsonFile.open(await fixture('search-limit.json', JSON.stringify(items)))
+    const result = (await file.search('apple')) as { hits: unknown[]; moreAvailable: boolean }
+    expect(result.hits).toHaveLength(10)
+    expect(result.moreAvailable).toBe(true)
+    await file.close()
+  })
+
+  it('stops early once ten exact matches fill the list', async () => {
+    const items = Array.from({ length: 40 }, (_, i) => ({ w: i < 15 ? 'apple' : `word${i}` }))
+    const file = await JsonFile.open(await fixture('search-early.json', JSON.stringify(items)))
+    const result = (await file.search('apple')) as { hits: Array<{ tier: number }>; moreAvailable: boolean }
+    expect(result.hits).toHaveLength(10)
+    expect(result.hits.every((h) => h.tier === 1)).toBe(true)
+    expect(result.moreAvailable).toBe(true)
+    await file.close()
+  })
+
+  it('returns snippets around the match and detects the enclosing field', async () => {
+    const long = 'lorem ipsum '.repeat(20) + 'apple pie recipe ' + 'dolor sit. '.repeat(20)
+    const file = await JsonFile.open(await fixture('search-snippet.json', JSON.stringify([{ body: long }])))
+    const result = (await file.search('pie')) as { hits: Array<{ snippet: string; field: string }> }
+    expect(result.hits[0].field).toBe('body')
+    expect(result.hits[0].snippet).toContain('…')
+    expect(result.hits[0].snippet).toContain('apple pie')
+    expect(result.hits[0].snippet.length).toBeLessThan(120)
+    await file.close()
+  })
+
+  it('handles multibyte content in matching and snippets', async () => {
+    const emoji = '\u{1F34E}'
+    const file = await JsonFile.open(
+      await fixture('search-utf8.json', JSON.stringify([{ note: `${emoji} is a red apple ${emoji}` }, { n: 1 }]))
+    )
+    const result = (await file.search(emoji)) as { hits: Array<{ index: number; snippet: string }> }
+    expect(result.hits).toHaveLength(1)
+    expect(result.hits[0].index).toBe(0)
+    expect(result.hits[0].snippet).toContain(emoji)
+    expect(result.hits[0].snippet).not.toContain('\uFFFD')
+    await file.close()
+  })
+
+  it('narrows results when the query extends the previous one', async () => {
+    const file = await JsonFile.open(
+      await fixture('search-narrow.json', JSON.stringify([{ w: 'app' }, { w: 'apple' }, { w: 'application' }]))
+    )
+    const first = (await file.search('app')) as { hits: Array<{ index: number; tier: number }> }
+    expect(first.hits.map((h) => h.index)).toEqual([0, 1, 2])
+    expect(first.hits.map((h) => h.tier)).toEqual([1, 2, 2])
+
+    const second = (await file.search('appl')) as { hits: Array<{ index: number }> }
+    expect(second.hits.map((h) => h.index)).toEqual([1, 2])
+
+    const third = (await file.search('apple')) as { hits: Array<{ index: number; tier: number }> }
+    expect(third.hits.map((h) => h.index)).toEqual([1])
+    expect(third.hits[0].tier).toBe(1)
+    await file.close()
+  })
+
+  it('classifies matches in pretty-printed JSON', async () => {
+    const path = await fixture('search-pretty.json', '[\n  {\n    "word": "fig"\n  },\n  {\n    "word": "apple"\n  }\n]')
+    const file = await JsonFile.open(path)
+    const result = (await file.search('apple')) as { hits: Array<{ index: number; tier: number; field: string }> }
+    expect(result.hits).toHaveLength(1)
+    expect(result.hits[0].index).toBe(1)
+    expect(result.hits[0].tier).toBe(1)
+    expect(result.hits[0].field).toBe('word')
+    await file.close()
+  })
+
+  it('cancels a scan through the cancel callback', async () => {
+    const items = Array.from({ length: 100 }, (_, i) => ({ text: `item with apple ${i}` }))
+    const file = await JsonFile.open(await fixture('search-cancel.json', JSON.stringify(items)))
+    await expect(file.search('apple', { isCanceled: () => true })).resolves.toBe(null)
+    await file.close()
+  })
+
+  it('returns no hits for an empty query', async () => {
+    const file = await JsonFile.open(await fixture('search-empty.json', '[{"a":1}]'))
+    await expect(file.search('')).resolves.toEqual({ hits: [], moreAvailable: false })
+    await file.close()
+  })
+
+  it('works on arrays of plain strings', async () => {
+    const file = await JsonFile.open(await fixture('search-strings.json', '["banana", "apple", "pineapple"]'))
+    const result = (await file.search('apple')) as { hits: Array<{ index: number; tier: number }> }
+    expect(result.hits.map((h) => h.index)).toEqual([1, 2])
+    expect(result.hits.map((h) => h.tier)).toEqual([1, 3])
+    await file.close()
+  })
+
+  it('rejects searching non-array roots', async () => {
+    const file = await JsonFile.open(await fixture('search-object.json', '{"word": "apple"}'))
+    expect(file.searchable).toBe(false)
+    await expect(file.search('apple')).rejects.toThrow(JsonError)
+    await file.close()
+  })
+})
+
 describe('non-array roots', () => {
   it('loads an object root', async () => {
     const path = await fixture('object.json', `{\n  "name": "John",\n  "age": 30\n}`)

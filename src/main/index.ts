@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError } from './jsonFile'
-import type { ItemResponse, OpenResponse } from '../shared/types'
+import type { ItemResponse, OpenResponse, SearchResponse } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let currentFile: JsonFile | null = null
+let searchSeq = 0
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -113,6 +114,23 @@ ipcMain.handle('json:get-item', (_event, index: unknown): Promise<ItemResponse> 
     .catch((err: unknown): ItemResponse => ({
       status: 'error',
       error: err instanceof JsonError ? err.message : `Item ${index + 1} could not be read.`
+    }))
+})
+
+ipcMain.handle('json:search', (_event, query: unknown): Promise<SearchResponse> => {
+  // Each new request invalidates the previous scan, so fast typing never
+  // queues up stale full-file passes.
+  const seq = ++searchSeq
+  const isCanceled = (): boolean => seq !== searchSeq
+  if (!currentFile) return Promise.resolve({ status: 'unsupported' })
+  if (typeof query !== 'string') return Promise.resolve({ status: 'error', message: 'Invalid search query.' })
+  if (!currentFile.searchable) return Promise.resolve({ status: 'unsupported' })
+  return currentFile
+    .search(query, { isCanceled })
+    .then((result): SearchResponse => (result === null ? { status: 'canceled' } : { status: 'ok', ...result }))
+    .catch((err: unknown): SearchResponse => ({
+      status: 'error',
+      message: err instanceof JsonError ? err.message : 'The search could not be completed.'
     }))
 })
 

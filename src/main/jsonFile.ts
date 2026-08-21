@@ -1,4 +1,5 @@
 import { open as fsOpen, type FileHandle } from 'node:fs/promises'
+import type { SearchHit, SearchTier } from '../shared/types'
 
 /**
  * Error with a user-facing message. `line`, when set, refers to the
@@ -36,6 +37,13 @@ const MAX_SINGLE_VALUE_BYTES = 256 * 1024 * 1024
 
 const MAX_PRIMITIVE_PREVIEW = 256
 
+const SEARCH_LIMIT = 10
+
+/** Characters that may directly precede the opening quote of a JSON string. */
+const STRING_OPENERS = new Set(['{', '[', ',', ':'])
+
+const SNIPPET_RADIUS = 40
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -46,6 +54,98 @@ function readError(err: unknown): JsonError {
   if (code === 'EACCES' || code === 'EPERM') return new JsonError('The file could not be read (permission denied).')
   if (code === 'EISDIR') return new JsonError('That path is a folder, not a file.')
   return new JsonError('The file could not be read.')
+}
+
+/**
+ * Decides whether the quote at `quoteAt` opens a JSON string, based on the
+ * nearest non-whitespace character before it. A quote at the very start of an
+ * element text (a bare string element) also opens a string.
+ */
+function opensString(text: string, quoteAt: number): boolean {
+  let i = quoteAt - 1
+  while (i >= 0 && /\s/.test(text[i])) i--
+  if (i < 0) return true
+  return STRING_OPENERS.has(text[i])
+}
+
+/** True when the quote at `quoteAt` is escaped by an odd run of backslashes. */
+function isEscapedQuote(text: string, quoteAt: number): boolean {
+  let slashes = 0
+  for (let i = quoteAt - 1; i >= 0 && text[i] === '\\'; i--) slashes++
+  return slashes % 2 === 1
+}
+
+/**
+ * Classifies one occurrence of a match in raw element text by looking at the
+ * characters around it. Tier 1 means the match sits alone between quotes as a
+ * complete JSON string value; tier 2 means it starts a string value; anything
+ * else is tier 3.
+ */
+function classifyMatch(text: string, at: number, length: number): SearchTier {
+  const quoteBefore = at - 1
+  if (quoteBefore < 0 || text[quoteBefore] !== '"') return 3
+  if (isEscapedQuote(text, quoteBefore) || !opensString(text, quoteBefore)) return 3
+  const after = text[at + length]
+  if (after === '"' && !isEscapedQuote(text, at + length)) return 1
+  if (after === undefined) return 3
+  return 2
+}
+
+/**
+ * Finds the best-ranked occurrence of `needle` (already lowercase) in raw
+ * element text, or null when it does not appear.
+ */
+function bestOccurrence(text: string, needle: string): { tier: SearchTier; at: number } | null {
+  const hay = text.toLowerCase()
+  let best: { tier: SearchTier; at: number } | null = null
+  let from = 0
+  while (from <= hay.length - needle.length) {
+    const at = hay.indexOf(needle, from)
+    if (at === -1) break
+    const tier = classifyMatch(text, at, needle.length)
+    if (tier === 1) return { tier, at }
+    if (!best || tier < best.tier) best = { tier, at }
+    from = at + 1
+  }
+  return best
+}
+
+/** The `"key":` label immediately enclosing a match position, if any. */
+function enclosingField(text: string, at: number): string | null {
+  // Walk back to the unescaped quote that opens the string holding the match…
+  let i = at - 1
+  while (i >= 0 && !(text[i] === '"' && !isEscapedQuote(text, i))) i--
+  if (i < 0) return null
+  // …which must be introduced by a `"key":` pair.
+  let j = skipWhitespaceBack(text, i - 1)
+  if (j < 0 || text[j] !== ':') return null
+  j = skipWhitespaceBack(text, j - 1)
+  if (j < 0 || text[j] !== '"' || isEscapedQuote(text, j)) return null
+  const keyClose = j
+  let k = keyClose - 1
+  while (k >= 0 && !(text[k] === '"' && !isEscapedQuote(text, k))) k--
+  if (k < 0) return null
+  return text
+    .slice(k + 1, keyClose)
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\')
+}
+
+function skipWhitespaceBack(text: string, from: number): number {
+  let i = from
+  while (i >= 0 && /\s/.test(text[i])) i--
+  return i
+}
+
+/** A one-line excerpt around a match, ellipsized on both sides as needed. */
+function makeSnippet(text: string, at: number, length: number): string {
+  let start = Math.max(0, at - SNIPPET_RADIUS)
+  let end = Math.min(text.length, at + length + SNIPPET_RADIUS)
+  // Do not cut a surrogate pair in half at either edge.
+  if (start > 0 && text.charCodeAt(start) >= 0xdc00 && text.charCodeAt(start) <= 0xdfff) start--
+  if (end < text.length && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--
+  const body = text.slice(start, end).replace(/\s+/g, ' ').trim()
+  return `${start > 0 ? '…' : ''}${body}${end < text.length ? '…' : ''}`
 }
 
 /**
@@ -63,6 +163,7 @@ export class JsonFile {
   private ends: number[] = []
   private rootValue: unknown
   private rootIsArray = false
+  private searchMemo: { query: string; indices: number[]; moreAvailable: boolean } | null = null
 
   private constructor() {}
 
@@ -91,13 +192,111 @@ export class JsonFile {
       : { type: 'value', value: this.rootValue }
   }
 
+  /** Search is only meaningful for array roots. */
+  get searchable(): boolean {
+    return this.rootIsArray
+  }
+
   async item(index: number): Promise<unknown> {
     if (!this.rootIsArray || !this.fd) throw new JsonError('The file is no longer open.')
     if (!Number.isInteger(index) || index < 0 || index >= this.starts.length) {
       throw new JsonError('The item index is out of range.')
     }
-    const start = this.starts[index]
-    const end = this.ends[index]
+    const buffer = await this.readSlice(this.starts[index], this.ends[index])
+    try {
+      return JSON.parse(buffer.toString('utf8'))
+    } catch (err) {
+      throw new JsonError(`Item ${index + 1} is not valid JSON: ${errorMessage(err)}`)
+    }
+  }
+
+  /**
+   * Case-insensitively searches every element's raw text for `query` and
+   * returns up to ten hits ranked by match quality (exact string values
+   * first, then value prefixes, then any occurrence). Elements are read one
+   * at a time via their byte ranges, so nothing is materialized up front.
+   *
+   * Returns null when the scan was canceled through `options.isCanceled`.
+   * When the query extends the previous one, the previous hits are re-verified
+   * first, which usually avoids a second pass over large files.
+   */
+  async search(
+    query: string,
+    options: { isCanceled?: () => boolean } = {}
+  ): Promise<{ hits: SearchHit[]; moreAvailable: boolean } | null> {
+    if (!this.rootIsArray || !this.fd) throw new JsonError('Search needs an open JSON array file.')
+    const needle = query.toLowerCase()
+    if (needle.length === 0) return { hits: [], moreAvailable: false }
+    const isCanceled = options.isCanceled ?? (() => false)
+
+    // A longer query can only match inside the previous query's matches.
+    // Re-verify those few elements instead of rescanning the whole file;
+    // fall back to a full scan when too few survive.
+    const memo = this.searchMemo
+    if (memo && needle.startsWith(memo.query)) {
+      const verified: SearchHit[] = []
+      for (const index of memo.indices) {
+        if (isCanceled()) return null
+        const text = (await this.readSlice(this.starts[index], this.ends[index])).toString('utf8')
+        const at = text.toLowerCase().indexOf(needle)
+        if (at === -1) continue
+        verified.push({
+          index,
+          tier: classifyMatch(text, at, needle.length),
+          field: enclosingField(text, at),
+          snippet: makeSnippet(text, at, needle.length)
+        })
+      }
+      if (verified.length >= SEARCH_LIMIT) return { hits: verified.slice(0, SEARCH_LIMIT), moreAvailable: true }
+    }
+
+    type Pick = { index: number; tier: SearchTier; at: number }
+    const picks: Pick[] = []
+    let dropped = false
+    let scannedAll = true
+
+    scan: for (let i = 0; i < this.starts.length; i++) {
+      if (isCanceled()) return null
+      const text = (await this.readSlice(this.starts[i], this.ends[i])).toString('utf8')
+      const found = bestOccurrence(text, needle)
+      if (!found) continue
+      // Picks are collected in index order; keep the list sorted by tier so
+      // the best ten survive regardless of where they were found.
+      let slot = picks.length
+      while (slot > 0 && picks[slot - 1].tier > found.tier) slot--
+      if (picks.length < SEARCH_LIMIT) {
+        picks.splice(slot, 0, { index: i, ...found })
+      } else if (slot < SEARCH_LIMIT) {
+        picks.splice(slot, 0, { index: i, ...found })
+        picks.pop()
+        dropped = true
+      } else {
+        dropped = true
+      }
+      // Ten exact matches cannot be outranked by anything later in the file.
+      if (picks.length === SEARCH_LIMIT && picks[SEARCH_LIMIT - 1].tier === 1) {
+        if (i < this.starts.length - 1) scannedAll = false
+        break scan
+      }
+    }
+
+    const hits = await Promise.all(
+      picks.map(async (pick): Promise<SearchHit> => {
+        const text = (await this.readSlice(this.starts[pick.index], this.ends[pick.index])).toString('utf8')
+        return {
+          index: pick.index,
+          tier: pick.tier,
+          field: enclosingField(text, pick.at),
+          snippet: makeSnippet(text, pick.at, needle.length)
+        }
+      })
+    )
+    this.searchMemo = { query: needle, indices: picks.map((p) => p.index), moreAvailable: dropped || !scannedAll }
+    return { hits, moreAvailable: dropped || !scannedAll }
+  }
+
+  private async readSlice(start: number, end: number): Promise<Buffer> {
+    if (!this.fd) throw new JsonError('The file is no longer open.')
     const length = end - start
     const buffer = Buffer.alloc(length)
     let total = 0
@@ -106,11 +305,7 @@ export class JsonFile {
       if (bytesRead === 0) throw new JsonError('The file ended unexpectedly while reading an item.')
       total += bytesRead
     }
-    try {
-      return JSON.parse(buffer.toString('utf8'))
-    } catch (err) {
-      throw new JsonError(`Item ${index + 1} is not valid JSON: ${errorMessage(err)}`)
-    }
+    return buffer
   }
 
   async close(): Promise<void> {
