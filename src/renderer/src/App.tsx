@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { jsonReader } from './ipc'
 import { JsonView } from './JsonView'
+import SearchBar from './SearchBar'
 
 type ItemState = { loading: true } | { value: unknown } | { error: string }
 
@@ -22,6 +23,7 @@ export default function App(): React.ReactElement {
   const [state, setState] = useState<State>({ view: 'empty' })
   const stateRef = useRef(state)
   stateRef.current = state
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const openFile = useCallback(async () => {
     if (stateRef.current.view === 'loading') return
@@ -59,7 +61,17 @@ export default function App(): React.ReactElement {
         void openFile()
         return
       }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        if (stateRef.current.view === 'array') {
+          event.preventDefault()
+          searchInputRef.current?.focus()
+        }
+        return
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return
+      // Arrow keys typed inside the search field belong to it, not the pager.
+      const tag = (event.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
       const current = stateRef.current
       if (current.view !== 'array') return
       const previous = event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'PageUp'
@@ -121,6 +133,15 @@ export default function App(): React.ReactElement {
             </span>
           )}
         </div>
+        {state.view === 'array' && state.count > 0 && (
+          <SearchBar
+            key={state.fileName}
+            inputRef={searchInputRef}
+            onSelect={(index) =>
+              setState((prev) => (prev.view === 'array' ? { ...prev, index, item: { loading: true } } : prev))
+            }
+          />
+        )}
         <button className="button" onClick={() => void openFile()} disabled={state.view === 'loading'}>
           Open JSON
         </button>
