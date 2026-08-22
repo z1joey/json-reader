@@ -36,6 +36,11 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
   const seqRef = useRef(0)
   const wrapRef = useRef<HTMLDivElement>(null)
 
+  const reset = (): void => {
+    setQuery('')
+    inputRef.current?.blur()
+  }
+
   // Debounced search; stale replies are dropped by sequence number.
   useEffect(() => {
     const trimmed = query.trim()
@@ -70,21 +75,17 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
   useEffect(() => {
     if (!open) return
     const onDown = (event: MouseEvent): void => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+      if (!wrapRef.current?.contains(event.target as Node)) reset()
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  const reset = (): void => {
-    setQuery('')
-    inputRef.current?.blur()
-  }
-
+  // Picking a hit keeps the query and the dropdown open so the remaining
+  // hits can be stepped through with the arrow keys and Enter.
   const pick = (hit: SearchHit | undefined): void => {
     if (!hit) return
     onSelect(hit.index)
-    reset()
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -117,6 +118,7 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
         role="combobox"
         aria-expanded={open}
         aria-controls="search-results"
+        aria-activedescendant={open && active >= 0 && hits[active] ? `search-result-${hits[active].index}` : undefined}
         autoComplete="off"
         spellCheck={false}
         value={query}

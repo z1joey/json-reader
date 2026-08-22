@@ -244,6 +244,69 @@ describe('search', () => {
     await file.close()
   })
 
+  it('keeps moreAvailable truthful on the memo fast path', async () => {
+    // Exactly ten matches: the full scan says no more are available and a
+    // narrowing query must not flip that to true.
+    const items = Array.from({ length: 10 }, (_, i) => ({ w: `apples ${i}` }))
+    const file = await JsonFile.open(await fixture('search-memo-exact.json', JSON.stringify(items)))
+    const first = (await file.search('apple')) as { moreAvailable: boolean }
+    expect(first.moreAvailable).toBe(false)
+    const second = (await file.search('apples')) as { hits: unknown[]; moreAvailable: boolean }
+    expect(second.hits).toHaveLength(10)
+    expect(second.moreAvailable).toBe(false)
+    await file.close()
+
+    // More than ten matches: narrowing keeps reporting more available.
+    const many = Array.from({ length: 12 }, (_, i) => ({ w: `apples ${i}` }))
+    const file2 = await JsonFile.open(await fixture('search-memo-more.json', JSON.stringify(many)))
+    const third = (await file2.search('apples')) as { moreAvailable: boolean }
+    expect(third.moreAvailable).toBe(true)
+    const fourth = (await file2.search('apples 1')) as { hits: Array<{ index: number }>; moreAvailable: boolean }
+    expect(fourth.hits.map((h) => h.index)).toEqual([1, 10, 11])
+    expect(fourth.moreAvailable).toBe(false)
+    await file2.close()
+  })
+
+  it('ranks occurrences on the memo fast path like a full scan', async () => {
+    const items = [
+      { a: 'crabapple sauce', b: 'apple sauce' },
+      ...Array.from({ length: 10 }, (_, i) => ({ w: `apple s ${i}` }))
+    ]
+    const path = await fixture('search-memo-rank.json', JSON.stringify(items))
+    const file = await JsonFile.open(path)
+    await file.search('apple')
+    const narrowed = (await file.search('apple s')) as {
+      hits: Array<{ index: number; tier: number; snippet: string; matchStart: number; matchLength: number }>
+    }
+    await file.close()
+    // A fresh full scan must produce exactly the same ranking.
+    const fresh = await JsonFile.open(path)
+    const scanned = (await fresh.search('apple s')) as typeof narrowed
+    await fresh.close()
+    expect(narrowed).toEqual(scanned)
+    expect(narrowed.hits[0]).toMatchObject({ index: 0, tier: 2 })
+    for (const hit of narrowed.hits) {
+      expect(hit.snippet.slice(hit.matchStart, hit.matchStart + hit.matchLength).toLowerCase()).toBe('apple s')
+    }
+  })
+
+  it('never classifies object keys as value matches', async () => {
+    const file = await JsonFile.open(
+      await fixture('search-keys.json', JSON.stringify([{ apple: 1 }, { w: 'apple' }, { 'apple pie': 2 }]))
+    )
+    const result = (await file.search('apple')) as { hits: Array<{ index: number; tier: number }> }
+    expect(result.hits.map((h) => h.index)).toEqual([1, 0, 2])
+    expect(result.hits.map((h) => h.tier)).toEqual([1, 3, 3])
+    await file.close()
+  })
+
+  it('treats strings in nested arrays as values', async () => {
+    const file = await JsonFile.open(await fixture('search-nested-value.json', JSON.stringify([['apple', 'banana']])))
+    const result = (await file.search('banana')) as { hits: Array<{ tier: number }> }
+    expect(result.hits[0].tier).toBe(1)
+    await file.close()
+  })
+
   it('cancels a scan through the cancel callback', async () => {
     const items = Array.from({ length: 100 }, (_, i) => ({ text: `item with apple ${i}` }))
     const file = await JsonFile.open(await fixture('search-cancel.json', JSON.stringify(items)))

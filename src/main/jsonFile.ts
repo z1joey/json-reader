@@ -39,8 +39,50 @@ const MAX_PRIMITIVE_PREVIEW = 256
 
 const SEARCH_LIMIT = 10
 
-/** Characters that may directly precede the opening quote of a JSON string. */
-const STRING_OPENERS = new Set(['{', '[', ',', ':'])
+/**
+ * Decides whether the quote at `quoteAt` opens a JSON string in a *value*
+ * position: a bare string element, an array element, or the value after a
+ * `"key":` pair. A quote that opens an object key is not a value position,
+ * so matches inside keys never rank as value matches.
+ */
+function opensValueString(text: string, quoteAt: number): boolean {
+  let i = quoteAt - 1
+  while (i >= 0 && /\s/.test(text[i])) i--
+  if (i < 0) return true
+  if (text[i] === ':' || text[i] === '[') return true
+  if (text[i] !== ',') return false
+  // After a comma the quote opens a value in an array but a key in an
+  // object; walk back to the enclosing bracket, jumping over string
+  // literals, to tell which one it is.
+  let depth = 0
+  while (i >= 0) {
+    const ch = text[i]
+    if (ch === '"') {
+      // An unescaped quote bounds a string literal; skip past its partner.
+      let slashes = 0
+      for (let j = i - 1; j >= 0 && text[j] === '\\'; j--) slashes++
+      if (slashes % 2 === 0) {
+        let k = i - 1
+        while (k >= 0) {
+          if (text[k] === '"') {
+            let inner = 0
+            for (let m = k - 1; m >= 0 && text[m] === '\\'; m--) inner++
+            if (inner % 2 === 0) break
+          }
+          k--
+        }
+        i = k - 1
+        continue
+      }
+    } else if (ch === ']' || ch === '}') depth++
+    else if (ch === '[' || ch === '{') {
+      if (depth === 0) return ch === '['
+      depth--
+    }
+    i--
+  }
+  return false
+}
 
 const SNIPPET_RADIUS = 40
 
@@ -57,18 +99,8 @@ function readError(err: unknown): JsonError {
 }
 
 /**
- * Decides whether the quote at `quoteAt` opens a JSON string, based on the
- * nearest non-whitespace character before it. A quote at the very start of an
- * element text (a bare string element) also opens a string.
+ * True when the quote at `quoteAt` is escaped by an odd run of backslashes.
  */
-function opensString(text: string, quoteAt: number): boolean {
-  let i = quoteAt - 1
-  while (i >= 0 && /\s/.test(text[i])) i--
-  if (i < 0) return true
-  return STRING_OPENERS.has(text[i])
-}
-
-/** True when the quote at `quoteAt` is escaped by an odd run of backslashes. */
 function isEscapedQuote(text: string, quoteAt: number): boolean {
   let slashes = 0
   for (let i = quoteAt - 1; i >= 0 && text[i] === '\\'; i--) slashes++
@@ -79,12 +111,12 @@ function isEscapedQuote(text: string, quoteAt: number): boolean {
  * Classifies one occurrence of a match in raw element text by looking at the
  * characters around it. Tier 1 means the match sits alone between quotes as a
  * complete JSON string value; tier 2 means it starts a string value; anything
- * else is tier 3.
+ * else is tier 3. Matches inside object keys are always tier 3.
  */
 function classifyMatch(text: string, at: number, length: number): SearchTier {
   const quoteBefore = at - 1
   if (quoteBefore < 0 || text[quoteBefore] !== '"') return 3
-  if (isEscapedQuote(text, quoteBefore) || !opensString(text, quoteBefore)) return 3
+  if (isEscapedQuote(text, quoteBefore) || !opensValueString(text, quoteBefore)) return 3
   const after = text[at + length]
   if (after === '"' && !isEscapedQuote(text, at + length)) return 1
   if (after === undefined) return 3
@@ -247,16 +279,22 @@ export class JsonFile {
       for (const index of memo.indices) {
         if (isCanceled()) return null
         const text = (await this.readSlice(this.starts[index], this.ends[index])).toString('utf8')
-        const at = text.toLowerCase().indexOf(needle)
-        if (at === -1) continue
+        // Rank occurrences exactly like the full scan does so both paths
+        // agree on tier and snippet for the same element.
+        const found = bestOccurrence(text, needle)
+        if (!found) continue
         verified.push({
           index,
-          tier: classifyMatch(text, at, needle.length),
-          field: enclosingField(text, at),
-          ...makeSnippet(text, at, needle.length)
+          tier: found.tier,
+          field: enclosingField(text, found.at),
+          ...makeSnippet(text, found.at, needle.length)
         })
       }
-      if (verified.length >= SEARCH_LIMIT) return { hits: verified.slice(0, SEARCH_LIMIT), moreAvailable: true }
+      // The memo cannot know about matches its source scan never saw, so it
+      // can never turn a `false` into a `true`.
+      if (verified.length >= SEARCH_LIMIT) {
+        return { hits: verified.slice(0, SEARCH_LIMIT), moreAvailable: memo.moreAvailable }
+      }
     }
 
     type Pick = { index: number; tier: SearchTier; at: number }
