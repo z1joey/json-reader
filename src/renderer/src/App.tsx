@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { OpenResponse, RootInfo } from '../../shared/types'
 import { jsonReader } from './ipc'
+import FilePanel from './FilePanel'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
 
@@ -12,6 +14,8 @@ type State =
   | { view: 'value'; fileName: string; value: unknown }
   | { view: 'error'; fileName: string; message: string }
 
+type FolderState = { name: string; files: string[]; activeIndex: number }
+
 const isMac = navigator.platform.startsWith('Mac')
 
 function fileNameOf(state: State): string | null {
@@ -21,44 +25,110 @@ function fileNameOf(state: State): string | null {
 
 export default function App(): React.ReactElement {
   const [state, setState] = useState<State>({ view: 'empty' })
+  const [folder, setFolder] = useState<FolderState | null>(null)
   const stateRef = useRef(state)
   stateRef.current = state
   const searchInputRef = useRef<HTMLInputElement>(null)
+  // A file load is in flight; refs (not state) so rapid clicks read them
+  // synchronously instead of waiting for a re-render.
+  const loadingRef = useRef(false)
+  const loadingFolderIndexRef = useRef<number | null>(null)
+  // The latest panel click made while a load was in flight (last write wins).
+  const pendingFolderIndexRef = useRef<number | null>(null)
 
-  const openFile = useCallback(async () => {
-    if (stateRef.current.view === 'loading') return
-    const before = stateRef.current
-    setState({ view: 'loading' })
-    const result = await jsonReader.open()
-    if (result.status === 'canceled') {
-      setState(before)
-      return
-    }
-    if (result.status === 'error') {
-      setState({ view: 'error', fileName: result.fileName, message: result.error })
-      return
-    }
-    if (result.root.type === 'array') {
+  const applyOpenedFile = useCallback((fileName: string, root: RootInfo): void => {
+    if (root.type === 'array') {
       setState({
         view: 'array',
-        fileName: result.fileName,
-        count: result.root.count,
+        fileName,
+        count: root.count,
         index: 0,
         item: { loading: true }
       })
     } else {
-      setState({ view: 'value', fileName: result.fileName, value: result.root.value })
+      setState({ view: 'value', fileName, value: root.value })
     }
   }, [])
 
-  useEffect(() => jsonReader.onOpenRequested(() => void openFile()), [openFile])
+  const loadFolderFile = useCallback(
+    async (index: number) => {
+      loadingRef.current = true
+      loadingFolderIndexRef.current = index
+      setFolder((prev) => (prev ? { ...prev, activeIndex: index } : prev))
+      setState({ view: 'loading' })
+      const result = await jsonReader.openFile(index)
+      if (result.status === 'ok') applyOpenedFile(result.fileName, result.root)
+      else setState({ view: 'error', fileName: result.fileName, message: result.error })
+      // Last write wins: if another panel click arrived while this file was
+      // opening, load it now instead of dropping it.
+      loadingFolderIndexRef.current = null
+      loadingRef.current = false
+      const pending = pendingFolderIndexRef.current
+      pendingFolderIndexRef.current = null
+      if (pending !== null) void loadFolderFile(pending)
+    },
+    [applyOpenedFile]
+  )
+
+  const openFromFolder = useCallback(
+    (index: number) => {
+      if (loadingRef.current) {
+        // A load is in flight: remember the latest request. Clicking the file
+        // that is already loading is a no-op.
+        if (loadingFolderIndexRef.current !== index) pendingFolderIndexRef.current = index
+        return
+      }
+      void loadFolderFile(index)
+    },
+    [loadFolderFile]
+  )
+
+  const pickPath = useCallback(
+    async (open: () => Promise<OpenResponse>) => {
+      if (loadingRef.current) return
+      const before = stateRef.current
+      loadingRef.current = true
+      setState({ view: 'loading' })
+      const result = await open()
+      // A dialog open replaces the folder, so a queued panel click can no
+      // longer be honored.
+      pendingFolderIndexRef.current = null
+      if (result.status === 'canceled') {
+        loadingRef.current = false
+        setState(before)
+        return
+      }
+      if (result.status === 'error') {
+        setFolder(null)
+        setState({ view: 'error', fileName: result.fileName, message: result.error })
+        loadingRef.current = false
+        return
+      }
+      if (result.status === 'folder') {
+        setFolder({ name: result.folderName, files: result.files, activeIndex: 0 })
+        void loadFolderFile(0)
+        return
+      }
+      setFolder(null)
+      applyOpenedFile(result.fileName, result.root)
+      loadingRef.current = false
+    },
+    [applyOpenedFile, loadFolderFile]
+  )
+
+  const pick = useCallback(() => pickPath(() => jsonReader.open()), [pickPath])
+  const pickFolder = useCallback(() => pickPath(() => jsonReader.openFolder()), [pickPath])
+
+  useEffect(() => jsonReader.onOpenRequested(() => void pick()), [pick])
+  useEffect(() => jsonReader.onOpenFolderRequested(() => void pickFolder()), [pickFolder])
 
   // The whole app is keyboard-driven: no element needs focus for these to work.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault()
-        void openFile()
+        if (event.shiftKey) void pickFolder()
+        else void pick()
         return
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
@@ -87,7 +157,7 @@ export default function App(): React.ReactElement {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [openFile])
+  }, [pick, pickFolder])
 
   // Fetch the current item; a stale reply for an older index is discarded.
   const arrayIndex = state.view === 'array' ? state.index : -1
@@ -142,36 +212,46 @@ export default function App(): React.ReactElement {
             }
           />
         )}
-        <button className="button" onClick={() => void openFile()} disabled={state.view === 'loading'}>
-          Open JSON
-        </button>
       </header>
 
-      <main className="content">
-        {state.view === 'empty' && <EmptyState onOpen={() => void openFile()} />}
-        {state.view === 'loading' && (
-          <div className="center-state">
-            <div className="spinner" />
-            <p className="state-text">Loading…</p>
-          </div>
+      <div className="body">
+        {folder && (
+          <FilePanel
+            name={folder.name}
+            files={folder.files}
+            activeIndex={folder.activeIndex}
+            onSelect={openFromFolder}
+          />
         )}
-        {state.view === 'error' && <ErrorState message={state.message} onOpen={() => void openFile()} />}
-        {state.view === 'value' && (
-          <div className="doc">
-            <JsonView value={state.value} />
-          </div>
-        )}
-        {state.view === 'array' &&
-          (state.count === 0 ? (
+
+        <main className="content">
+          {state.view === 'empty' && <EmptyState onOpen={() => void pick()} />}
+          {state.view === 'loading' && (
             <div className="center-state">
-              <p className="state-text">This array is empty.</p>
+              <div className="spinner" />
+              <p className="state-text">Loading…</p>
             </div>
-          ) : (
+          )}
+          {state.view === 'error' && (
+            <ErrorState message={state.message} onOpen={folder ? null : () => void pick()} />
+          )}
+          {state.view === 'value' && (
             <div className="doc">
-              <ItemBody item={state.item} />
+              <JsonView value={state.value} />
             </div>
-          ))}
-      </main>
+          )}
+          {state.view === 'array' &&
+            (state.count === 0 ? (
+              <div className="center-state">
+                <p className="state-text">This array is empty.</p>
+              </div>
+            ) : (
+              <div className="doc">
+                <ItemBody item={state.item} />
+              </div>
+            ))}
+        </main>
+      </div>
 
       {state.view === 'array' && state.count > 0 && (
         <footer className="footer">
@@ -209,12 +289,13 @@ function EmptyState({ onOpen }: { onOpen: () => void }): React.ReactElement {
   return (
     <div className="center-state">
       <div className="glyph">{'{ }'}</div>
-      <p className="state-text">Open a JSON file to start reading</p>
+      <p className="state-text">Open a JSON file or folder to start reading</p>
       <button className="button" onClick={onOpen}>
         Open JSON
       </button>
       <p className="hint">
-        or press <kbd>{isMac ? '⌘O' : 'Ctrl+O'}</kbd>
+        or press <kbd>{isMac ? '⌘O' : 'Ctrl+O'}</kbd> for files,{' '}
+        <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd> for folders
       </p>
     </div>
   )

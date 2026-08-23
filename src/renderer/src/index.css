@@ -98,10 +98,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.header .button {
-  -webkit-app-region: no-drag;
-}
-
 /* ── Search ─────────────────────────────────────────────────────────── */
 
 /* The search field floats dead-center in the header, above the drag region. */
@@ -253,8 +249,79 @@ body {
   margin-top: 2px;
 }
 
+/* ── Folder panel ───────────────────────────────────────────────────── */
+
+/* The leading panel that lists the JSON files of an opened folder. */
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-panel {
+  width: 232px;
+  flex: none;
+  background: var(--panel);
+  border-right: 1px solid var(--hairline);
+  overflow-y: auto;
+}
+
+.file-panel-title {
+  padding: 14px 16px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--key);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-item:hover {
+  background: var(--bg);
+}
+
+.file-item.active {
+  background: var(--bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.file-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
 }
 

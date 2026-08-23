@@ -1,10 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
+import { readdir, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError } from './jsonFile'
-import type { ItemResponse, OpenResponse, SearchResponse } from '../shared/types'
+import type { ItemResponse, OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let currentFile: JsonFile | null = null
+let currentFolderFiles: string[] | null = null
 let searchSeq = 0
 
 function createWindow(): void {
@@ -45,6 +47,9 @@ function buildMenu(): void {
   const requestOpen = (): void => {
     mainWindow?.webContents.send('open-json-requested')
   }
+  const requestOpenFolder = (): void => {
+    mainWindow?.webContents.send('open-folder-requested')
+  }
 
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{ role: 'appMenu' as const }] : []),
@@ -52,6 +57,7 @@ function buildMenu(): void {
       label: 'File',
       submenu: [
         { label: 'Open JSON…', accelerator: 'CmdOrCtrl+O', click: requestOpen },
+        { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: requestOpenFolder },
         { type: 'separator' },
         { role: isMac ? 'close' : 'quit' }
       ]
@@ -73,26 +79,10 @@ async function closeCurrentFile(): Promise<void> {
   }
 }
 
-ipcMain.handle('json:open', async (): Promise<OpenResponse> => {
-  const win = mainWindow
-  if (!win) return { status: 'canceled' }
-
-  const picked = await dialog.showOpenDialog(win, {
-    title: 'Open JSON file',
-    properties: ['openFile'],
-    filters: [
-      { name: 'JSON', extensions: ['json'] },
-      { name: 'All Files', extensions: ['*'] }
-    ]
-  })
-  if (picked.canceled || picked.filePaths.length === 0) return { status: 'canceled' }
-
-  const path = picked.filePaths[0]
+/** Opens `path` as the current file, replacing whatever was open before. */
+async function openJsonFile(path: string): Promise<OpenFileResponse> {
   const fileName = basename(path)
   try {
-    if (!/\.json$/i.test(path)) {
-      return { status: 'error', fileName, error: 'Unsupported file: expected a .json file.' }
-    }
     await closeCurrentFile()
     const file = await JsonFile.open(path)
     currentFile = file
@@ -102,6 +92,97 @@ ipcMain.handle('json:open', async (): Promise<OpenResponse> => {
     const message = err instanceof JsonError ? err.message : 'The file could not be read.'
     return { status: 'error', fileName, error: message }
   }
+}
+
+/**
+ * Opens whatever `path` points at: a `.json` file, or a folder whose
+ * top-level JSON files become the current folder.
+ */
+async function openPath(path: string): Promise<OpenResponse> {
+  let isDirectory: boolean
+  try {
+    isDirectory = (await stat(path)).isDirectory()
+  } catch {
+    return { status: 'error', fileName: basename(path), error: 'The path could not be read.' }
+  }
+
+  if (!isDirectory) {
+    if (!/\.json$/i.test(path)) {
+      return { status: 'error', fileName: basename(path), error: 'Unsupported file: expected a .json file.' }
+    }
+    currentFolderFiles = null
+    return openJsonFile(path)
+  }
+
+  // A folder: list its top-level JSON files, skipping hidden dotfiles.
+  let names: string[]
+  try {
+    const entries = await readdir(path, { withFileTypes: true })
+    names = entries
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.json$/i.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b))
+  } catch {
+    return { status: 'error', fileName: basename(path), error: 'The folder could not be read.' }
+  }
+
+  if (names.length === 0) {
+    await closeCurrentFile()
+    currentFolderFiles = null
+    return {
+      status: 'error',
+      fileName: basename(path),
+      error: 'No JSON files found in this folder. Please choose another folder.'
+    }
+  }
+  // A single JSON file behaves like a plain file open: no folder panel.
+  if (names.length === 1) {
+    currentFolderFiles = null
+    return openJsonFile(join(path, names[0]))
+  }
+  currentFolderFiles = names.map((name) => join(path, name))
+  return { status: 'folder', folderName: basename(path), files: names }
+}
+
+/**
+ * On Windows and Linux an open dialog cannot select files and folders at
+ * once, so the two flows get separate dialogs: `json:open` is a pure file
+ * selector and `json:open-folder` a pure directory selector.
+ */
+async function showAndOpen(win: BrowserWindow, options: Electron.OpenDialogOptions): Promise<OpenResponse> {
+  const picked = await dialog.showOpenDialog(win, options)
+  if (picked.canceled || picked.filePaths.length === 0) return { status: 'canceled' }
+  return openPath(picked.filePaths[0])
+}
+
+ipcMain.handle('json:open', (): Promise<OpenResponse> => {
+  const win = mainWindow
+  if (!win) return Promise.resolve({ status: 'canceled' })
+  return showAndOpen(win, {
+    title: 'Open JSON file',
+    properties: ['openFile'],
+    filters: [
+      { name: 'JSON', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  })
+})
+
+ipcMain.handle('json:open-folder', (): Promise<OpenResponse> => {
+  const win = mainWindow
+  if (!win) return Promise.resolve({ status: 'canceled' })
+  return showAndOpen(win, {
+    title: 'Open folder',
+    properties: ['openDirectory']
+  })
+})
+
+ipcMain.handle('json:open-file', (_event, index: unknown): Promise<OpenFileResponse> => {
+  const files = currentFolderFiles
+  if (!files || typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= files.length) {
+    return Promise.resolve({ status: 'error', fileName: '', error: 'No folder is open.' })
+  }
+  return openJsonFile(files[index])
 })
 
 ipcMain.handle('json:get-item', (_event, index: unknown): Promise<ItemResponse> => {
