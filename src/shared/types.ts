@@ -5,6 +5,11 @@ export type RootInfo = { type: 'array'; count: number } | { type: 'value'; value
 export type OpenResponse =
   | { status: 'canceled' }
   | { status: 'ok'; fileName: string; root: RootInfo }
+  | { status: 'folder'; folderName: string; files: string[] }
+  | { status: 'error'; fileName: string; error: string }
+
+export type OpenFileResponse =
+  | { status: 'ok'; fileName: string; root: RootInfo }
   | { status: 'error'; fileName: string; error: string }
 
 export type ItemResponse = { status: 'ok'; value: unknown } | { status: 'error'; error: string }
@@ -38,8 +43,10 @@ export type SearchResponse =
   | { status: 'error'; message: string }
 
 export interface JsonReaderApi {
-  /** Shows the open-file dialog, then loads and analyzes the chosen file. */
+  /** Shows the open-file dialog, then loads the chosen file or folder. */
   open: () => Promise<OpenResponse>
+  /** Loads the file at `index` of the folder opened most recently. */
+  openFile: (index: number) => Promise<OpenFileResponse>
   /** Parses one top-level element of an array-root file on demand. */
   getItem: (index: number) => Promise<ItemResponse>
   /**
