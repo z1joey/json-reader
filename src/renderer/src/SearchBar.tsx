@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import type { SearchHit, SearchTier } from '../../shared/types'
+import type { SearchHit } from '../../shared/types'
 import { jsonReader } from './ipc'
 
 const DEBOUNCE_MS = 200
 
 type Props = {
   inputRef: React.RefObject<HTMLInputElement | null>
-  onSelect: (index: number) => void
+  onSelect: (hit: SearchHit) => void
 }
-
-const TIER_LABEL: Record<SearchTier, string> = { 1: 'exact', 2: 'starts', 3: 'text' }
 
 function HighlightedSnippet({ hit }: { hit: SearchHit }): React.ReactElement {
   const { snippet, matchStart, matchLength } = hit
@@ -81,11 +79,11 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  // Picking a hit keeps the query and the dropdown open so the remaining
-  // hits can be stepped through with the arrow keys and Enter.
   const pick = (hit: SearchHit | undefined): void => {
     if (!hit) return
-    onSelect(hit.index)
+    onSelect(hit)
+    setOpen(false)
+    setActive(-1)
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -118,7 +116,9 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
         role="combobox"
         aria-expanded={open}
         aria-controls="search-results"
-        aria-activedescendant={open && active >= 0 && hits[active] ? `search-result-${hits[active].index}` : undefined}
+        aria-activedescendant={
+          open && active >= 0 && hits[active] ? `search-result-${hits[active].fileIndex}-${hits[active].index}` : undefined
+        }
         autoComplete="off"
         spellCheck={false}
         value={query}
@@ -135,8 +135,8 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
             <ul className="search-list" id="search-results" role="listbox" aria-label="Search results">
               {hits.map((hit, i) => (
                 <li
-                  key={hit.index}
-                  id={`search-result-${hit.index}`}
+                  key={`${hit.fileIndex}-${hit.index}`}
+                  id={`search-result-${hit.fileIndex}-${hit.index}`}
                   role="option"
                   aria-selected={i === active}
                   className={`search-hit${hit.tier === 1 ? ' exact' : ''}${i === active ? ' active' : ''}`}
@@ -144,7 +144,9 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => pick(hit)}
                 >
-                  <span className={`search-tier t${hit.tier}`}>{TIER_LABEL[hit.tier]}</span>
+                  <span className="search-file" title={hit.fileName}>
+                    {hit.fileName}
+                  </span>
                   <span className="search-main">
                     {hit.field && <span className="search-field">{hit.field}</span>}
                     <span className="search-snippet">

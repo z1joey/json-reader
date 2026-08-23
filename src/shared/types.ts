@@ -22,8 +22,9 @@ export type ItemResponse = { status: 'ok'; value: unknown } | { status: 'error';
  */
 export type SearchTier = 1 | 2 | 3
 
-export type SearchHit = {
-  /** Index of the matching top-level element. */
+/** A search hit inside one JSON file, before file identity is attached. */
+export type SearchHitBase = {
+  /** Index of the matching top-level element inside that file. */
   index: number
   tier: SearchTier
   /** Name of the field enclosing the first match, when detectable. */
@@ -34,6 +35,13 @@ export type SearchHit = {
   matchStart: number
   /** Length of the matched query inside `snippet`. */
   matchLength: number
+}
+
+export type SearchHit = SearchHitBase & {
+  /** Index of the file in the currently opened folder. */
+  fileIndex: number
+  /** Display name of the file containing the hit. */
+  fileName: string
 }
 
 export type SearchResponse =
@@ -50,8 +58,9 @@ export interface JsonReaderApi {
   /** Parses one top-level element of an array-root file on demand. */
   getItem: (index: number) => Promise<ItemResponse>
   /**
-   * Searches the elements of an array-root file for a case-insensitive
-   * substring, returning at most ten hits ranked by match quality.
+   * Searches the currently open folder (or the current file when no folder
+   * is open) for a case-insensitive substring, returning at most ten hits
+   * ranked by match quality.
    */
   search: (query: string) => Promise<SearchResponse>
   /** Fired when the user opens a folder via the menu (Cmd/Ctrl+O). */

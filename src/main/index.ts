@@ -1,13 +1,16 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { JsonFile, JsonError } from './jsonFile'
-import type { ItemResponse, OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
+import { JsonFile, JsonError, searchText } from './jsonFile'
+import type { ItemResponse, OpenFileResponse, OpenResponse, SearchHit, SearchResponse } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let currentFile: JsonFile | null = null
+let currentFileName: string | null = null
 let currentFolderFiles: string[] | null = null
 let searchSeq = 0
+
+const FOLDER_SEARCH_LIMIT = 10
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -82,9 +85,11 @@ async function openJsonFile(path: string): Promise<OpenFileResponse> {
     await closeCurrentFile()
     const file = await JsonFile.open(path)
     currentFile = file
+    currentFileName = fileName
     return { status: 'ok', fileName, root: file.root }
   } catch (err) {
     currentFile = null
+    currentFileName = null
     const message = err instanceof JsonError ? err.message : 'The file could not be read.'
     return { status: 'error', fileName, error: message }
   }
@@ -108,6 +113,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
 
   if (names.length === 0) {
     await closeCurrentFile()
+    currentFileName = null
     currentFolderFiles = null
     return {
       status: 'error',
@@ -160,21 +166,88 @@ ipcMain.handle('json:get-item', (_event, index: unknown): Promise<ItemResponse> 
     }))
 })
 
+async function searchCurrentFile(query: string, isCanceled: () => boolean): Promise<SearchResponse> {
+  if (!currentFile || !currentFile.searchable) return { status: 'unsupported' }
+  try {
+    const result = await currentFile.search(query, { isCanceled })
+    if (result === null) return { status: 'canceled' }
+    const fileName = currentFileName ?? ''
+    return {
+      status: 'ok',
+      hits: result.hits.map((hit) => ({ ...hit, fileIndex: 0, fileName })),
+      moreAvailable: result.moreAvailable
+    }
+  } catch (err) {
+    return {
+      status: 'error',
+      message: err instanceof JsonError ? err.message : 'The search could not be completed.'
+    }
+  }
+}
+
+async function searchFolder(query: string, isCanceled: () => boolean): Promise<SearchResponse> {
+  if (!currentFolderFiles || currentFolderFiles.length === 0) return { status: 'unsupported' }
+  const hits: SearchHit[] = []
+  let moreAvailable = false
+
+  const addHit = (hit: SearchHit): void => {
+    let slot = hits.length
+    while (slot > 0 && hits[slot - 1].tier > hit.tier) slot--
+    if (hits.length < FOLDER_SEARCH_LIMIT) {
+      hits.splice(slot, 0, hit)
+    } else if (slot < FOLDER_SEARCH_LIMIT) {
+      hits.splice(slot, 0, hit)
+      hits.pop()
+      moreAvailable = true
+    } else {
+      moreAvailable = true
+    }
+  }
+
+  for (let fileIndex = 0; fileIndex < currentFolderFiles.length; fileIndex++) {
+    if (isCanceled()) return { status: 'canceled' }
+    const path = currentFolderFiles[fileIndex]
+    const fileName = basename(path)
+
+    let file: JsonFile | null = null
+    try {
+      file = await JsonFile.open(path)
+    } catch {
+      file = null
+    }
+
+    try {
+      if (file?.searchable) {
+        const result = await file.search(query, { isCanceled })
+        if (result === null) return { status: 'canceled' }
+        for (const hit of result.hits) {
+          addHit({ ...hit, fileIndex, fileName })
+        }
+      } else {
+        const text = await readFile(path, 'utf8')
+        const found = searchText(text, query)
+        if (found) addHit({ ...found, fileIndex, fileName, index: 0 })
+      }
+    } catch {
+      // Skip files that cannot be searched (unreadable, malformed, etc.).
+    } finally {
+      await file?.close().catch(() => {})
+    }
+  }
+
+  return { status: 'ok', hits, moreAvailable }
+}
+
 ipcMain.handle('json:search', (_event, query: unknown): Promise<SearchResponse> => {
   // Each new request invalidates the previous scan, so fast typing never
   // queues up stale full-file passes.
   const seq = ++searchSeq
   const isCanceled = (): boolean => seq !== searchSeq
-  if (!currentFile) return Promise.resolve({ status: 'unsupported' })
   if (typeof query !== 'string') return Promise.resolve({ status: 'error', message: 'Invalid search query.' })
-  if (!currentFile.searchable) return Promise.resolve({ status: 'unsupported' })
-  return currentFile
-    .search(query, { isCanceled })
-    .then((result): SearchResponse => (result === null ? { status: 'canceled' } : { status: 'ok', ...result }))
-    .catch((err: unknown): SearchResponse => ({
-      status: 'error',
-      message: err instanceof JsonError ? err.message : 'The search could not be completed.'
-    }))
+  const search = currentFolderFiles && currentFolderFiles.length > 0
+    ? searchFolder(query, isCanceled)
+    : searchCurrentFile(query, isCanceled)
+  return search
 })
 
 void app.whenReady().then(() => {

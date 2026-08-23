@@ -29,7 +29,8 @@ npm run typecheck
   `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`.
 - **Renderer** (`src/renderer`) — React app; renders the current value only.
   Opening a folder lists its top-level `.json` files in a sidebar and loads
-  the selected file.
+  the selected file. Search is folder-aware: results can come from any JSON
+  file in the opened folder, and selecting a result jumps to that file.
 
 Keyboard: `⌘/Ctrl+O` opens a folder; `←/↑/PageUp` and `→/↓/PageDown` move
 between array items. Appearance follows the system light/dark setting.

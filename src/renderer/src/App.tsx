@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { RootInfo } from '../../shared/types'
+import type { RootInfo, SearchHit } from '../../shared/types'
 import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
 import { JsonView } from './JsonView'
@@ -15,6 +15,8 @@ type State =
   | { view: 'error'; fileName: string; message: string }
 
 type FolderState = { name: string; files: string[]; activeIndex: number }
+
+type PendingFolderRequest = { index: number; itemIndex?: number }
 
 const isMac = navigator.platform.startsWith('Mac')
 
@@ -33,8 +35,9 @@ export default function App(): React.ReactElement {
   // synchronously instead of waiting for a re-render.
   const loadingRef = useRef(false)
   const loadingFolderIndexRef = useRef<number | null>(null)
-  // The latest panel click made while a load was in flight (last write wins).
-  const pendingFolderIndexRef = useRef<number | null>(null)
+  // The latest panel click or search selection made while a load was in flight
+  // (last write wins).
+  const pendingFolderIndexRef = useRef<PendingFolderRequest | null>(null)
 
   const applyOpenedFile = useCallback((fileName: string, root: RootInfo): void => {
     if (root.type === 'array') {
@@ -51,36 +54,64 @@ export default function App(): React.ReactElement {
   }, [])
 
   const loadFolderFile = useCallback(
-    async (index: number) => {
+    async (index: number, itemIndex?: number) => {
       loadingRef.current = true
       loadingFolderIndexRef.current = index
       setFolder((prev) => (prev ? { ...prev, activeIndex: index } : prev))
       setState({ view: 'loading' })
       const result = await jsonReader.openFile(index)
-      if (result.status === 'ok') applyOpenedFile(result.fileName, result.root)
-      else setState({ view: 'error', fileName: result.fileName, message: result.error })
+      if (result.status === 'ok') {
+        if (itemIndex !== undefined && result.root.type === 'array' && itemIndex >= 0 && itemIndex < result.root.count) {
+          setState({
+            view: 'array',
+            fileName: result.fileName,
+            count: result.root.count,
+            index: itemIndex,
+            item: { loading: true }
+          })
+        } else {
+          applyOpenedFile(result.fileName, result.root)
+        }
+      } else {
+        setState({ view: 'error', fileName: result.fileName, message: result.error })
+      }
       // Last write wins: if another panel click arrived while this file was
       // opening, load it now instead of dropping it.
       loadingFolderIndexRef.current = null
       loadingRef.current = false
       const pending = pendingFolderIndexRef.current
       pendingFolderIndexRef.current = null
-      if (pending !== null) void loadFolderFile(pending)
+      if (pending !== null) void loadFolderFile(pending.index, pending.itemIndex)
     },
     [applyOpenedFile]
   )
 
   const openFromFolder = useCallback(
-    (index: number) => {
+    (index: number, itemIndex?: number) => {
       if (loadingRef.current) {
         // A load is in flight: remember the latest request. Clicking the file
-        // that is already loading is a no-op.
-        if (loadingFolderIndexRef.current !== index) pendingFolderIndexRef.current = index
+        // that is already loading is a no-op unless a specific item was asked.
+        if (loadingFolderIndexRef.current !== index || itemIndex !== undefined) {
+          pendingFolderIndexRef.current = { index, itemIndex }
+        }
         return
       }
-      void loadFolderFile(index)
+      void loadFolderFile(index, itemIndex)
     },
     [loadFolderFile]
+  )
+
+  const handleSearchSelect = useCallback(
+    (hit: SearchHit) => {
+      if (folder && hit.fileIndex >= 0 && hit.fileIndex < folder.files.length && hit.fileIndex !== folder.activeIndex) {
+        openFromFolder(hit.fileIndex, hit.index)
+        return
+      }
+      if (stateRef.current.view === 'array') {
+        setState((prev) => (prev.view === 'array' ? { ...prev, index: hit.index, item: { loading: true } } : prev))
+      }
+    },
+    [folder, openFromFolder]
   )
 
   const pickFolder = useCallback(async () => {
@@ -124,7 +155,7 @@ export default function App(): React.ReactElement {
         return
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
-        if (stateRef.current.view === 'array') {
+        if (stateRef.current.view === 'array' || folder) {
           event.preventDefault()
           searchInputRef.current?.focus()
         }
@@ -149,7 +180,7 @@ export default function App(): React.ReactElement {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [pickFolder])
+  }, [folder, pickFolder])
 
   // Fetch the current item; a stale reply for an older index is discarded.
   const arrayIndex = state.view === 'array' ? state.index : -1
@@ -195,13 +226,11 @@ export default function App(): React.ReactElement {
             </span>
           )}
         </div>
-        {state.view === 'array' && state.count > 0 && (
+        {(folder || (state.view === 'array' && state.count > 0)) && (
           <SearchBar
-            key={state.fileName}
+            key={folder ? `${folder.name}:${folder.files.join(',')}` : state.view === 'array' ? state.fileName : ''}
             inputRef={searchInputRef}
-            onSelect={(index) =>
-              setState((prev) => (prev.view === 'array' ? { ...prev, index, item: { loading: true } } : prev))
-            }
+            onSelect={handleSearchSelect}
           />
         )}
       </header>

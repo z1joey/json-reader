@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { OpenFileResponse, OpenResponse } from '../shared/types'
+import type { OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
 
 // Electron is replaced wholesale: only the pieces index.ts touches exist,
 // and the dialog is driven by each test. The file system stays real, so
@@ -73,6 +73,8 @@ function pick(...filePaths: string[]): void {
 const openFolder = (): Promise<OpenResponse> => handlers.get('json:open-folder')!() as Promise<OpenResponse>
 const openFile = (index: number): Promise<OpenFileResponse> =>
   handlers.get('json:open-file')!(undefined, index) as Promise<OpenFileResponse>
+const search = (query: string): Promise<SearchResponse> =>
+  handlers.get('json:search')!(undefined, query) as Promise<SearchResponse>
 
 describe('open folder', () => {
   it('only registers the folder-opening dialog flow', () => {
@@ -141,5 +143,41 @@ describe('open folder', () => {
     const labels = (file?.submenu ?? []).map((item) => item.label)
     expect(labels).toContain('Open Folder…')
     expect(labels).not.toContain('Open JSON…')
+  })
+
+  it('searches across all JSON files in the opened folder', async () => {
+    const folder = await folderFixture('search-folder', {
+      'a.json': '[{"word": "apple"}]',
+      'b.json': '[{"word": "banana"}]',
+      'c.json': '{"note": "apple pie"}'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await search('apple')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.hits.length).toBeGreaterThanOrEqual(2)
+    const files = result.hits.map((hit) => hit.fileName)
+    expect(files).toContain('a.json')
+    expect(files).toContain('c.json')
+    for (const hit of result.hits) {
+      expect(hit.fileIndex).toBeGreaterThanOrEqual(0)
+      expect(hit.fileName).toBeTruthy()
+    }
+  })
+
+  it('includes array-item hits from another file with its file identity', async () => {
+    const folder = await folderFixture('search-array', {
+      'a.json': '[{"word": "one"}]',
+      'b.json': '[{"word": "apple"}, {"word": "apple pie"}]'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await search('apple')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    const bHits = result.hits.filter((hit) => hit.fileName === 'b.json')
+    expect(bHits.length).toBeGreaterThan(0)
+    expect(bHits[0].fileIndex).toBe(1)
   })
 })

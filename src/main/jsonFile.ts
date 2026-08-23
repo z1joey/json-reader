@@ -1,5 +1,5 @@
 import { open as fsOpen, type FileHandle } from 'node:fs/promises'
-import type { SearchHit, SearchTier } from '../shared/types'
+import type { SearchHitBase, SearchTier } from '../shared/types'
 
 /**
  * Error with a user-facing message. `line`, when set, refers to the
@@ -264,7 +264,7 @@ export class JsonFile {
   async search(
     query: string,
     options: { isCanceled?: () => boolean } = {}
-  ): Promise<{ hits: SearchHit[]; moreAvailable: boolean } | null> {
+  ): Promise<{ hits: SearchHitBase[]; moreAvailable: boolean } | null> {
     if (!this.rootIsArray || !this.fd) throw new JsonError('Search needs an open JSON array file.')
     const needle = query.toLowerCase()
     if (needle.length === 0) return { hits: [], moreAvailable: false }
@@ -275,7 +275,7 @@ export class JsonFile {
     // fall back to a full scan when too few survive.
     const memo = this.searchMemo
     if (memo && needle.startsWith(memo.query)) {
-      const verified: SearchHit[] = []
+      const verified: SearchHitBase[] = []
       for (const index of memo.indices) {
         if (isCanceled()) return null
         const text = (await this.readSlice(this.starts[index], this.ends[index])).toString('utf8')
@@ -328,7 +328,7 @@ export class JsonFile {
     }
 
     const hits = await Promise.all(
-      picks.map(async (pick): Promise<SearchHit> => {
+      picks.map(async (pick): Promise<SearchHitBase> => {
         const text = (await this.readSlice(this.starts[pick.index], this.ends[pick.index])).toString('utf8')
         return {
           index: pick.index,
@@ -574,5 +574,24 @@ export class JsonFile {
       }
       throw new JsonError(`Invalid JSON: ${errorMessage(err)}`)
     }
+  }
+}
+
+/**
+ * Searches raw JSON text for a query and returns the best-ranked match.
+ * This is used for folder-wide search on files whose root is not an array.
+ */
+export function searchText(
+  text: string,
+  query: string
+): { tier: SearchTier; field: string | null; snippet: string; matchStart: number; matchLength: number } | null {
+  const needle = query.toLowerCase()
+  if (needle.length === 0) return null
+  const found = bestOccurrence(text, needle)
+  if (!found) return null
+  return {
+    tier: found.tier,
+    field: enclosingField(text, found.at),
+    ...makeSnippet(text, found.at, needle.length)
   }
 }
