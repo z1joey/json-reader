@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { OpenResponse, RootInfo } from '../../shared/types'
+import type { RootInfo } from '../../shared/types'
 import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
 import { JsonView } from './JsonView'
@@ -83,43 +83,36 @@ export default function App(): React.ReactElement {
     [loadFolderFile]
   )
 
-  const pickPath = useCallback(
-    async (open: () => Promise<OpenResponse>) => {
-      if (loadingRef.current) return
-      const before = stateRef.current
-      loadingRef.current = true
-      setState({ view: 'loading' })
-      const result = await open()
-      // A dialog open replaces the folder, so a queued panel click can no
-      // longer be honored.
-      pendingFolderIndexRef.current = null
-      if (result.status === 'canceled') {
-        loadingRef.current = false
-        setState(before)
-        return
-      }
-      if (result.status === 'error') {
-        setFolder(null)
-        setState({ view: 'error', fileName: result.fileName, message: result.error })
-        loadingRef.current = false
-        return
-      }
-      if (result.status === 'folder') {
-        setFolder({ name: result.folderName, files: result.files, activeIndex: 0 })
-        void loadFolderFile(0)
-        return
-      }
-      setFolder(null)
-      applyOpenedFile(result.fileName, result.root)
+  const pickFolder = useCallback(async () => {
+    if (loadingRef.current) return
+    const before = stateRef.current
+    loadingRef.current = true
+    setState({ view: 'loading' })
+    const result = await jsonReader.openFolder()
+    // A dialog open replaces the folder, so a queued panel click can no
+    // longer be honored.
+    pendingFolderIndexRef.current = null
+    if (result.status === 'canceled') {
       loadingRef.current = false
-    },
-    [applyOpenedFile, loadFolderFile]
-  )
+      setState(before)
+      return
+    }
+    if (result.status === 'error') {
+      setFolder(null)
+      setState({ view: 'error', fileName: result.fileName, message: result.error })
+      loadingRef.current = false
+      return
+    }
+    if (result.status === 'folder') {
+      setFolder({ name: result.folderName, files: result.files, activeIndex: 0 })
+      void loadFolderFile(0)
+      return
+    }
+    setFolder(null)
+    applyOpenedFile(result.fileName, result.root)
+    loadingRef.current = false
+  }, [applyOpenedFile, loadFolderFile])
 
-  const pick = useCallback(() => pickPath(() => jsonReader.open()), [pickPath])
-  const pickFolder = useCallback(() => pickPath(() => jsonReader.openFolder()), [pickPath])
-
-  useEffect(() => jsonReader.onOpenRequested(() => void pick()), [pick])
   useEffect(() => jsonReader.onOpenFolderRequested(() => void pickFolder()), [pickFolder])
 
   // The whole app is keyboard-driven: no element needs focus for these to work.
@@ -127,8 +120,7 @@ export default function App(): React.ReactElement {
     const onKey = (event: KeyboardEvent): void => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault()
-        if (event.shiftKey) void pickFolder()
-        else void pick()
+        void pickFolder()
         return
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
@@ -157,7 +149,7 @@ export default function App(): React.ReactElement {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [pick, pickFolder])
+  }, [pickFolder])
 
   // Fetch the current item; a stale reply for an older index is discarded.
   const arrayIndex = state.view === 'array' ? state.index : -1
@@ -225,7 +217,7 @@ export default function App(): React.ReactElement {
         )}
 
         <main className="content">
-          {state.view === 'empty' && <EmptyState onOpen={() => void pick()} />}
+          {state.view === 'empty' && <EmptyState onOpenFolder={() => void pickFolder()} />}
           {state.view === 'loading' && (
             <div className="center-state">
               <div className="spinner" />
@@ -233,7 +225,7 @@ export default function App(): React.ReactElement {
             </div>
           )}
           {state.view === 'error' && (
-            <ErrorState message={state.message} onOpen={folder ? null : () => void pick()} />
+            <ErrorState message={state.message} onOpenFolder={folder ? null : () => void pickFolder()} />
           )}
           {state.view === 'value' && (
             <div className="doc">
@@ -280,35 +272,34 @@ function ItemBody({ item }: { item: ItemState }): React.ReactElement {
     )
   }
   if ('error' in item) {
-    return <ErrorState message={item.error} onOpen={null} />
+    return <ErrorState message={item.error} onOpenFolder={null} />
   }
   return <JsonView value={item.value} />
 }
 
-function EmptyState({ onOpen }: { onOpen: () => void }): React.ReactElement {
+function EmptyState({ onOpenFolder }: { onOpenFolder: () => void }): React.ReactElement {
   return (
     <div className="center-state">
       <div className="glyph">{'{ }'}</div>
-      <p className="state-text">Open a JSON file or folder to start reading</p>
-      <button className="button" onClick={onOpen}>
-        Open JSON
+      <p className="state-text">Open a folder to start reading JSON files</p>
+      <button className="button" onClick={onOpenFolder}>
+        Open Folder
       </button>
       <p className="hint">
-        or press <kbd>{isMac ? '⌘O' : 'Ctrl+O'}</kbd> for files,{' '}
-        <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd> for folders
+        or press <kbd>{isMac ? '⌘O' : 'Ctrl+O'}</kbd>
       </p>
     </div>
   )
 }
 
-function ErrorState({ message, onOpen }: { message: string; onOpen: (() => void) | null }): React.ReactElement {
+function ErrorState({ message, onOpenFolder }: { message: string; onOpenFolder: (() => void) | null }): React.ReactElement {
   return (
     <div className="center-state">
       <h2 className="error-title">Unable to read JSON</h2>
       <p className="error-message">{message}</p>
-      {onOpen && (
-        <button className="button" onClick={onOpen}>
-          Open JSON
+      {onOpenFolder && (
+        <button className="button" onClick={onOpenFolder}>
+          Open Folder
         </button>
       )}
     </div>

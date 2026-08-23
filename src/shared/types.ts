@@ -43,9 +43,7 @@ export type SearchResponse =
   | { status: 'error'; message: string }
 
 export interface JsonReaderApi {
-  /** Shows the open-file dialog, then loads the chosen file. */
-  open: () => Promise<OpenResponse>
-  /** Shows the open-folder dialog, then loads the folder's JSON files. */
+  /** Shows the open-folder dialog and loads the folder's JSON files. */
   openFolder: () => Promise<OpenResponse>
   /** Loads the file at `index` of the folder opened most recently. */
   openFile: (index: number) => Promise<OpenFileResponse>
@@ -56,8 +54,6 @@ export interface JsonReaderApi {
    * substring, returning at most ten hits ranked by match quality.
    */
   search: (query: string) => Promise<SearchResponse>
-  /** Fired when the user opens a file via the menu (Cmd/Ctrl+O). */
-  onOpenRequested: (callback: () => void) => () => void
-  /** Fired when the user opens a folder via the menu (Cmd/Ctrl+Shift+O). */
+  /** Fired when the user opens a folder via the menu (Cmd/Ctrl+O). */
   onOpenFolderRequested: (callback: () => void) => () => void
 }

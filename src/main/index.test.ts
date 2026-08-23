@@ -57,12 +57,6 @@ beforeEach(() => {
   dialogMock.showOpenDialog.mockReset()
 })
 
-async function fixture(name: string, content: string): Promise<string> {
-  const path = join(dir, name)
-  await writeFile(path, content, 'utf8')
-  return path
-}
-
 async function folderFixture(name: string, files: Record<string, string>): Promise<string> {
   const folder = join(dir, name)
   await mkdir(folder)
@@ -76,26 +70,17 @@ function pick(...filePaths: string[]): void {
   dialogMock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths })
 }
 
-const open = (): Promise<OpenResponse> => handlers.get('json:open')!() as Promise<OpenResponse>
 const openFolder = (): Promise<OpenResponse> => handlers.get('json:open-folder')!() as Promise<OpenResponse>
 const openFile = (index: number): Promise<OpenFileResponse> =>
   handlers.get('json:open-file')!(undefined, index) as Promise<OpenFileResponse>
 
-describe('open dialogs', () => {
-  it('keeps the Open JSON dialog a file selector so single files stay openable on every platform', async () => {
-    const path = await fixture('single.json', '{"a": 1}')
-    pick(path)
-    const result = await open()
-    // On Windows and Linux a dialog cannot select files and folders at once,
-    // so 'openDirectory' must stay out of the file dialog's properties.
-    expect(dialogMock.showOpenDialog).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ properties: ['openFile'] })
-    )
-    expect(result).toEqual({ status: 'ok', fileName: 'single.json', root: { type: 'value', value: { a: 1 } } })
+describe('open folder', () => {
+  it('only registers the folder-opening dialog flow', () => {
+    expect(handlers.has('json:open-folder')).toBe(true)
+    expect(handlers.has('json:open')).toBe(false)
   })
 
-  it('opens a folder through a separate directory-only dialog', async () => {
+  it('opens a folder through a directory-only dialog', async () => {
     const folder = await folderFixture('multi', { 'b.json': '[2]', 'a.json': '[1]' })
     pick(folder)
     const result = await openFolder()
@@ -144,29 +129,17 @@ describe('open dialogs', () => {
     })
   })
 
-  it('rejects a non-JSON file picked in the file dialog', async () => {
-    const path = await fixture('notes.txt', 'plain text')
-    pick(path)
-    const result = await open()
-    expect(result).toEqual({
-      status: 'error',
-      fileName: 'notes.txt',
-      error: 'Unsupported file: expected a .json file.'
-    })
-  })
-
   it('reports a canceled dialog without changing anything', async () => {
     dialogMock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
-    expect(await open()).toEqual({ status: 'canceled' })
     expect(await openFolder()).toEqual({ status: 'canceled' })
   })
 
-  it('lists Open JSON and Open Folder as separate menu items', () => {
+  it('lists Open Folder as the only open command in the menu', () => {
     type Item = { label?: string; submenu?: Item[] }
     const template = menuMock.buildFromTemplate.mock.calls[0][0] as Item[]
     const file = template.find((item) => item.label === 'File')
     const labels = (file?.submenu ?? []).map((item) => item.label)
-    expect(labels).toContain('Open JSON…')
     expect(labels).toContain('Open Folder…')
+    expect(labels).not.toContain('Open JSON…')
   })
 })

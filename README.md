@@ -23,10 +23,13 @@ npm run typecheck
   records only the byte range of each top-level element, then parses elements
   individually on demand. Opening a huge file never parses it all, and moving
   between items never re-reads the file.
-- **Preload** (`src/preload`) — exposes exactly three calls
-  (`open`, `getItem`, `onOpenRequested`) over `contextBridge`.
+- **Preload** (`src/preload`) — exposes the renderer-facing calls
+  (`openFolder`, `openFile`, `getItem`, `search`, `onOpenFolderRequested`)
+  over `contextBridge`.
   `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`.
 - **Renderer** (`src/renderer`) — React app; renders the current value only.
+  Opening a folder lists its top-level `.json` files in a sidebar and loads
+  the selected file.
 
-Keyboard: `⌘/Ctrl+O` opens a file; `←/↑/PageUp` and `→/↓/PageDown` move
+Keyboard: `⌘/Ctrl+O` opens a folder; `←/↑/PageUp` and `→/↓/PageDown` move
 between array items. Appearance follows the system light/dark setting.
