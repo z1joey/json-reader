@@ -180,4 +180,60 @@ describe('open folder', () => {
     expect(bHits.length).toBeGreaterThan(0)
     expect(bHits[0].fileIndex).toBe(1)
   })
+
+  it('reports more folder matches when a single file exceeds the hit limit', async () => {
+    const many = Array.from({ length: 15 }, () => '{"word": "apple"}').join(',')
+    const folder = await folderFixture('search-more', {
+      'many.json': `[${many}]`,
+      'none.json': '[{"word": "banana"}]'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await search('apple')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // 15 matches exist but the folder cap shows ten; the file-level flag
+    // must surface so the "refine your search" hint appears.
+    expect(result.hits.length).toBe(10)
+    expect(result.moreAvailable).toBe(true)
+  })
+
+  // Unlinking a file with an open handle only works on POSIX; on Windows the
+  // delete itself fails, so these cache-reuse probes cannot run there.
+  it.skipIf(process.platform === 'win32')('keeps analyzed array files warm across folder searches', async () => {
+    const folder = await folderFixture('search-warm-array', {
+      'a.json': '[{"word": "apple"}, {"word": "apple pie"}]',
+      'b.json': '[{"word": "banana"}]'
+    })
+    pick(folder)
+    await openFolder()
+    expect((await search('apple')).status).toBe('ok')
+    // Deleting the file proves the second query does not reopen it: the
+    // cached entry keeps serving from its still-open handle.
+    await rm(join(folder, 'a.json'))
+    const second = await search('apple')
+    expect(second.status).toBe('ok')
+    if (second.status !== 'ok') return
+    expect(second.hits.map((hit) => hit.fileName)).toContain('a.json')
+  })
+
+  it.skipIf(process.platform === 'win32')('caches non-array file text across folder searches', async () => {
+    const folder = await folderFixture('search-warm-text', {
+      'c.json': '{"note": "apple pie"}',
+      'd.json': '[{"word": "banana"}]'
+    })
+    pick(folder)
+    await openFolder()
+    const first = await search('apple')
+    expect(first.status).toBe('ok')
+    if (first.status !== 'ok') return
+    expect(first.hits.some((hit) => hit.fileName === 'c.json')).toBe(true)
+    // Deleting the file proves the second query does not reread it: the
+    // cached raw text keeps serving the hit.
+    await rm(join(folder, 'c.json'))
+    const second = await search('apple')
+    expect(second.status).toBe('ok')
+    if (second.status !== 'ok') return
+    expect(second.hits.some((hit) => hit.fileName === 'c.json')).toBe(true)
+  })
 })

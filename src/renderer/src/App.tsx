@@ -4,6 +4,7 @@ import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
+import { decideSearchSelect } from './searchSelect'
 
 type ItemState = { loading: true } | { value: unknown } | { error: string }
 
@@ -103,12 +104,11 @@ export default function App(): React.ReactElement {
 
   const handleSearchSelect = useCallback(
     (hit: SearchHit) => {
-      if (folder && hit.fileIndex >= 0 && hit.fileIndex < folder.files.length && hit.fileIndex !== folder.activeIndex) {
-        openFromFolder(hit.fileIndex, hit.index)
-        return
-      }
-      if (stateRef.current.view === 'array') {
-        setState((prev) => (prev.view === 'array' ? { ...prev, index: hit.index, item: { loading: true } } : prev))
+      const decision = decideSearchSelect(hit, folder, loadingRef.current, stateRef.current.view === 'array')
+      if (decision.kind === 'open') {
+        openFromFolder(decision.index, decision.itemIndex)
+      } else if (decision.kind === 'jump') {
+        setState((prev) => (prev.view === 'array' ? { ...prev, index: decision.itemIndex, item: { loading: true } } : prev))
       }
     },
     [folder, openFromFolder]

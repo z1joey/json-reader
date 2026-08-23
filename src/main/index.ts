@@ -12,6 +12,20 @@ let searchSeq = 0
 
 const FOLDER_SEARCH_LIMIT = 10
 
+type FolderSearchEntry = { file: JsonFile | null; text: string | null }
+
+// Folder-wide search keeps one entry per file so repeated queries reuse the
+// open file (its fd, element ranges, and search memo) instead of re-analyzing
+// every file on each keystroke. Entries are dropped — closing any open file
+// handles — whenever the folder changes.
+const folderSearchCache = new Map<string, FolderSearchEntry>()
+
+async function clearFolderSearchCache(): Promise<void> {
+  const entries = [...folderSearchCache.values()]
+  folderSearchCache.clear()
+  await Promise.all(entries.map((entry) => entry.file?.close().catch(() => {})))
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1000,
@@ -112,6 +126,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   }
 
   if (names.length === 0) {
+    await clearFolderSearchCache()
     await closeCurrentFile()
     currentFileName = null
     currentFolderFiles = null
@@ -123,9 +138,11 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   }
   // A single JSON file behaves like a plain file open: no folder panel.
   if (names.length === 1) {
+    await clearFolderSearchCache()
     currentFolderFiles = null
     return openJsonFile(join(path, names[0]))
   }
+  await clearFolderSearchCache()
   currentFolderFiles = names.map((name) => join(path, name))
   return { status: 'folder', folderName: basename(path), files: names }
 }
@@ -209,29 +226,46 @@ async function searchFolder(query: string, isCanceled: () => boolean): Promise<S
     const path = currentFolderFiles[fileIndex]
     const fileName = basename(path)
 
-    let file: JsonFile | null = null
-    try {
-      file = await JsonFile.open(path)
-    } catch {
-      file = null
+    // Reuse the entry from previous searches so array roots keep their fd,
+    // element ranges, and search memo (incremental search), and non-array
+    // roots keep their raw text (no second read per query).
+    let entry = folderSearchCache.get(path)
+    if (!entry) {
+      entry = { file: null, text: null }
+      folderSearchCache.set(path, entry)
+      try {
+        const file = await JsonFile.open(path)
+        if (file.searchable) entry.file = file
+        else await file.close()
+      } catch {
+        // Unreadable or malformed; the raw-text pass below still gets a shot.
+      }
+      if (!entry.file) {
+        try {
+          entry.text = await readFile(path, 'utf8')
+        } catch {
+          // The file stays in the cache as an empty entry so this folder's
+          // searches do not retry opening it on every query.
+        }
+      }
     }
 
     try {
-      if (file?.searchable) {
-        const result = await file.search(query, { isCanceled })
+      if (entry.file) {
+        const result = await entry.file.search(query, { isCanceled })
         if (result === null) return { status: 'canceled' }
+        // A single file can hold more matches than the folder cap reports;
+        // its flag is the only way those extra matches become visible.
+        moreAvailable = moreAvailable || result.moreAvailable
         for (const hit of result.hits) {
           addHit({ ...hit, fileIndex, fileName })
         }
-      } else {
-        const text = await readFile(path, 'utf8')
-        const found = searchText(text, query)
+      } else if (entry.text !== null) {
+        const found = searchText(entry.text, query)
         if (found) addHit({ ...found, fileIndex, fileName, index: 0 })
       }
     } catch {
       // Skip files that cannot be searched (unreadable, malformed, etc.).
-    } finally {
-      await file?.close().catch(() => {})
     }
   }
 
