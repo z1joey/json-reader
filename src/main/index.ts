@@ -47,6 +47,9 @@ function buildMenu(): void {
   const requestOpen = (): void => {
     mainWindow?.webContents.send('open-json-requested')
   }
+  const requestOpenFolder = (): void => {
+    mainWindow?.webContents.send('open-folder-requested')
+  }
 
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{ role: 'appMenu' as const }] : []),
@@ -54,6 +57,7 @@ function buildMenu(): void {
       label: 'File',
       submenu: [
         { label: 'Open JSON…', accelerator: 'CmdOrCtrl+O', click: requestOpen },
+        { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: requestOpenFolder },
         { type: 'separator' },
         { role: isMac ? 'close' : 'quit' }
       ]
@@ -90,21 +94,11 @@ async function openJsonFile(path: string): Promise<OpenFileResponse> {
   }
 }
 
-ipcMain.handle('json:open', async (): Promise<OpenResponse> => {
-  const win = mainWindow
-  if (!win) return { status: 'canceled' }
-
-  const picked = await dialog.showOpenDialog(win, {
-    title: 'Open JSON file',
-    properties: ['openFile', 'openDirectory'],
-    filters: [
-      { name: 'JSON', extensions: ['json'] },
-      { name: 'All Files', extensions: ['*'] }
-    ]
-  })
-  if (picked.canceled || picked.filePaths.length === 0) return { status: 'canceled' }
-
-  const path = picked.filePaths[0]
+/**
+ * Opens whatever `path` points at: a `.json` file, or a folder whose
+ * top-level JSON files become the current folder.
+ */
+async function openPath(path: string): Promise<OpenResponse> {
   let isDirectory: boolean
   try {
     isDirectory = (await stat(path)).isDirectory()
@@ -148,6 +142,39 @@ ipcMain.handle('json:open', async (): Promise<OpenResponse> => {
   }
   currentFolderFiles = names.map((name) => join(path, name))
   return { status: 'folder', folderName: basename(path), files: names }
+}
+
+/**
+ * On Windows and Linux an open dialog cannot select files and folders at
+ * once, so the two flows get separate dialogs: `json:open` is a pure file
+ * selector and `json:open-folder` a pure directory selector.
+ */
+async function showAndOpen(win: BrowserWindow, options: Electron.OpenDialogOptions): Promise<OpenResponse> {
+  const picked = await dialog.showOpenDialog(win, options)
+  if (picked.canceled || picked.filePaths.length === 0) return { status: 'canceled' }
+  return openPath(picked.filePaths[0])
+}
+
+ipcMain.handle('json:open', (): Promise<OpenResponse> => {
+  const win = mainWindow
+  if (!win) return Promise.resolve({ status: 'canceled' })
+  return showAndOpen(win, {
+    title: 'Open JSON file',
+    properties: ['openFile'],
+    filters: [
+      { name: 'JSON', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  })
+})
+
+ipcMain.handle('json:open-folder', (): Promise<OpenResponse> => {
+  const win = mainWindow
+  if (!win) return Promise.resolve({ status: 'canceled' })
+  return showAndOpen(win, {
+    title: 'Open folder',
+    properties: ['openDirectory']
+  })
 })
 
 ipcMain.handle('json:open-file', (_event, index: unknown): Promise<OpenFileResponse> => {
