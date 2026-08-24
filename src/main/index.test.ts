@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { OpenFileResponse, OpenResponse } from '../shared/types'
+import type { OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
 
 // Electron is replaced wholesale: only the pieces index.ts touches exist,
 // and the dialog is driven by each test. The file system stays real, so
@@ -57,12 +57,6 @@ beforeEach(() => {
   dialogMock.showOpenDialog.mockReset()
 })
 
-async function fixture(name: string, content: string): Promise<string> {
-  const path = join(dir, name)
-  await writeFile(path, content, 'utf8')
-  return path
-}
-
 async function folderFixture(name: string, files: Record<string, string>): Promise<string> {
   const folder = join(dir, name)
   await mkdir(folder)
@@ -76,26 +70,19 @@ function pick(...filePaths: string[]): void {
   dialogMock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths })
 }
 
-const open = (): Promise<OpenResponse> => handlers.get('json:open')!() as Promise<OpenResponse>
 const openFolder = (): Promise<OpenResponse> => handlers.get('json:open-folder')!() as Promise<OpenResponse>
 const openFile = (index: number): Promise<OpenFileResponse> =>
   handlers.get('json:open-file')!(undefined, index) as Promise<OpenFileResponse>
+const search = (query: string): Promise<SearchResponse> =>
+  handlers.get('json:search')!(undefined, query) as Promise<SearchResponse>
 
-describe('open dialogs', () => {
-  it('keeps the Open JSON dialog a file selector so single files stay openable on every platform', async () => {
-    const path = await fixture('single.json', '{"a": 1}')
-    pick(path)
-    const result = await open()
-    // On Windows and Linux a dialog cannot select files and folders at once,
-    // so 'openDirectory' must stay out of the file dialog's properties.
-    expect(dialogMock.showOpenDialog).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ properties: ['openFile'] })
-    )
-    expect(result).toEqual({ status: 'ok', fileName: 'single.json', root: { type: 'value', value: { a: 1 } } })
+describe('open folder', () => {
+  it('only registers the folder-opening dialog flow', () => {
+    expect(handlers.has('json:open-folder')).toBe(true)
+    expect(handlers.has('json:open')).toBe(false)
   })
 
-  it('opens a folder through a separate directory-only dialog', async () => {
+  it('opens a folder through a directory-only dialog', async () => {
     const folder = await folderFixture('multi', { 'b.json': '[2]', 'a.json': '[1]' })
     pick(folder)
     const result = await openFolder()
@@ -144,29 +131,109 @@ describe('open dialogs', () => {
     })
   })
 
-  it('rejects a non-JSON file picked in the file dialog', async () => {
-    const path = await fixture('notes.txt', 'plain text')
-    pick(path)
-    const result = await open()
-    expect(result).toEqual({
-      status: 'error',
-      fileName: 'notes.txt',
-      error: 'Unsupported file: expected a .json file.'
-    })
-  })
-
   it('reports a canceled dialog without changing anything', async () => {
     dialogMock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
-    expect(await open()).toEqual({ status: 'canceled' })
     expect(await openFolder()).toEqual({ status: 'canceled' })
   })
 
-  it('lists Open JSON and Open Folder as separate menu items', () => {
+  it('lists Open Folder as the only open command in the menu', () => {
     type Item = { label?: string; submenu?: Item[] }
     const template = menuMock.buildFromTemplate.mock.calls[0][0] as Item[]
     const file = template.find((item) => item.label === 'File')
     const labels = (file?.submenu ?? []).map((item) => item.label)
-    expect(labels).toContain('Open JSON…')
     expect(labels).toContain('Open Folder…')
+    expect(labels).not.toContain('Open JSON…')
+  })
+
+  it('searches across all JSON files in the opened folder', async () => {
+    const folder = await folderFixture('search-folder', {
+      'a.json': '[{"word": "apple"}]',
+      'b.json': '[{"word": "banana"}]',
+      'c.json': '{"note": "apple pie"}'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await search('apple')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.hits.length).toBeGreaterThanOrEqual(2)
+    const files = result.hits.map((hit) => hit.fileName)
+    expect(files).toContain('a.json')
+    expect(files).toContain('c.json')
+    for (const hit of result.hits) {
+      expect(hit.fileIndex).toBeGreaterThanOrEqual(0)
+      expect(hit.fileName).toBeTruthy()
+    }
+  })
+
+  it('includes array-item hits from another file with its file identity', async () => {
+    const folder = await folderFixture('search-array', {
+      'a.json': '[{"word": "one"}]',
+      'b.json': '[{"word": "apple"}, {"word": "apple pie"}]'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await search('apple')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    const bHits = result.hits.filter((hit) => hit.fileName === 'b.json')
+    expect(bHits.length).toBeGreaterThan(0)
+    expect(bHits[0].fileIndex).toBe(1)
+  })
+
+  it('reports more folder matches when a single file exceeds the hit limit', async () => {
+    const many = Array.from({ length: 15 }, () => '{"word": "apple"}').join(',')
+    const folder = await folderFixture('search-more', {
+      'many.json': `[${many}]`,
+      'none.json': '[{"word": "banana"}]'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await search('apple')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // 15 matches exist but the folder cap shows ten; the file-level flag
+    // must surface so the "refine your search" hint appears.
+    expect(result.hits.length).toBe(10)
+    expect(result.moreAvailable).toBe(true)
+  })
+
+  // Unlinking a file with an open handle only works on POSIX; on Windows the
+  // delete itself fails, so these cache-reuse probes cannot run there.
+  it.skipIf(process.platform === 'win32')('keeps analyzed array files warm across folder searches', async () => {
+    const folder = await folderFixture('search-warm-array', {
+      'a.json': '[{"word": "apple"}, {"word": "apple pie"}]',
+      'b.json': '[{"word": "banana"}]'
+    })
+    pick(folder)
+    await openFolder()
+    expect((await search('apple')).status).toBe('ok')
+    // Deleting the file proves the second query does not reopen it: the
+    // cached entry keeps serving from its still-open handle.
+    await rm(join(folder, 'a.json'))
+    const second = await search('apple')
+    expect(second.status).toBe('ok')
+    if (second.status !== 'ok') return
+    expect(second.hits.map((hit) => hit.fileName)).toContain('a.json')
+  })
+
+  it.skipIf(process.platform === 'win32')('caches non-array file text across folder searches', async () => {
+    const folder = await folderFixture('search-warm-text', {
+      'c.json': '{"note": "apple pie"}',
+      'd.json': '[{"word": "banana"}]'
+    })
+    pick(folder)
+    await openFolder()
+    const first = await search('apple')
+    expect(first.status).toBe('ok')
+    if (first.status !== 'ok') return
+    expect(first.hits.some((hit) => hit.fileName === 'c.json')).toBe(true)
+    // Deleting the file proves the second query does not reread it: the
+    // cached raw text keeps serving the hit.
+    await rm(join(folder, 'c.json'))
+    const second = await search('apple')
+    expect(second.status).toBe('ok')
+    if (second.status !== 'ok') return
+    expect(second.hits.some((hit) => hit.fileName === 'c.json')).toBe(true)
   })
 })

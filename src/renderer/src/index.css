@@ -175,25 +175,15 @@ body {
   background: var(--bg);
 }
 
-.search-tier {
+.search-file {
   flex: none;
-  width: 42px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.search-tier.t1 {
-  color: var(--accent);
-}
-
-.search-tier.t2 {
-  color: var(--muted);
-}
-
-.search-tier.t3 {
-  color: var(--faint);
+  max-width: 140px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--key);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .search-main {

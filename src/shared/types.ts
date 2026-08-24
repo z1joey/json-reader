@@ -22,8 +22,9 @@ export type ItemResponse = { status: 'ok'; value: unknown } | { status: 'error';
  */
 export type SearchTier = 1 | 2 | 3
 
-export type SearchHit = {
-  /** Index of the matching top-level element. */
+/** A search hit inside one JSON file, before file identity is attached. */
+export type SearchHitBase = {
+  /** Index of the matching top-level element inside that file. */
   index: number
   tier: SearchTier
   /** Name of the field enclosing the first match, when detectable. */
@@ -36,6 +37,13 @@ export type SearchHit = {
   matchLength: number
 }
 
+export type SearchHit = SearchHitBase & {
+  /** Index of the file in the currently opened folder. */
+  fileIndex: number
+  /** Display name of the file containing the hit. */
+  fileName: string
+}
+
 export type SearchResponse =
   | { status: 'ok'; hits: SearchHit[]; moreAvailable: boolean }
   | { status: 'canceled' }
@@ -43,21 +51,18 @@ export type SearchResponse =
   | { status: 'error'; message: string }
 
 export interface JsonReaderApi {
-  /** Shows the open-file dialog, then loads the chosen file. */
-  open: () => Promise<OpenResponse>
-  /** Shows the open-folder dialog, then loads the folder's JSON files. */
+  /** Shows the open-folder dialog and loads the folder's JSON files. */
   openFolder: () => Promise<OpenResponse>
   /** Loads the file at `index` of the folder opened most recently. */
   openFile: (index: number) => Promise<OpenFileResponse>
   /** Parses one top-level element of an array-root file on demand. */
   getItem: (index: number) => Promise<ItemResponse>
   /**
-   * Searches the elements of an array-root file for a case-insensitive
-   * substring, returning at most ten hits ranked by match quality.
+   * Searches the currently open folder (or the current file when no folder
+   * is open) for a case-insensitive substring, returning at most ten hits
+   * ranked by match quality.
    */
   search: (query: string) => Promise<SearchResponse>
-  /** Fired when the user opens a file via the menu (Cmd/Ctrl+O). */
-  onOpenRequested: (callback: () => void) => () => void
-  /** Fired when the user opens a folder via the menu (Cmd/Ctrl+Shift+O). */
+  /** Fired when the user opens a folder via the menu (Cmd/Ctrl+O). */
   onOpenFolderRequested: (callback: () => void) => () => void
 }
