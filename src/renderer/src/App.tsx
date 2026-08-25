@@ -4,7 +4,7 @@ import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
-import { decideFileSwitch } from './fileSwitch'
+import { decideFileSwitch, latestRequestedIndex } from './fileSwitch'
 import { decideSearchSelect } from './searchSelect'
 
 type ItemState = { loading: true } | { value: unknown } | { error: string }
@@ -174,8 +174,13 @@ export default function App(): React.ReactElement {
       // ↑/↓ switch between the files of the opened folder; they never page
       // array items and do nothing unless a multi-file folder is open.
       if (filePrevious || fileNext) {
-        // While a load is in flight its target is the freshest position.
-        const activeIndex = loadingFolderIndexRef.current ?? folder?.activeIndex ?? -1
+        // The queued request outranks the in-flight load, which outranks the
+        // last finished file — otherwise rapid presses collapse into one step.
+        const activeIndex = latestRequestedIndex(
+          pendingFolderIndexRef.current?.index ?? null,
+          loadingFolderIndexRef.current,
+          folder?.activeIndex
+        )
         const decision = decideFileSwitch(
           fileNext ? 'next' : 'previous',
           folder ? { fileCount: folder.files.length, activeIndex } : null

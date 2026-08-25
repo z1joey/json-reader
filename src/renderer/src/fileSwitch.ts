@@ -15,3 +15,13 @@ export function decideFileSwitch(direction: 'previous' | 'next', folder: FileSwi
   if (index < 0 || index >= folder.fileCount) return { kind: 'none' }
   return { kind: 'open', index }
 }
+
+/**
+ * The freshest requested file position: a queued panel/keyboard request
+ * outranks the in-flight load, which outranks the last finished file.
+ * Reading only the in-flight load makes rapid presses recompute the same
+ * step and collapse into one. `-1` means nothing was ever requested.
+ */
+export function latestRequestedIndex(pending: number | null, loading: number | null, settled: number | undefined): number {
+  return pending ?? loading ?? settled ?? -1
+}
