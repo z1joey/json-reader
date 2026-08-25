@@ -4,6 +4,7 @@ import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
+import { decideFileSwitch, latestRequestedIndex } from './fileSwitch'
 import { decideSearchSelect } from './searchSelect'
 
 type ItemState = { loading: true } | { value: unknown } | { error: string }
@@ -165,11 +166,32 @@ export default function App(): React.ReactElement {
       // Arrow keys typed inside the search field belong to it, not the pager.
       const tag = (event.target as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const previous = event.key === 'ArrowLeft' || event.key === 'PageUp'
+      const next = event.key === 'ArrowRight' || event.key === 'PageDown'
+      const filePrevious = event.key === 'ArrowUp'
+      const fileNext = event.key === 'ArrowDown'
+      if (!previous && !next && !filePrevious && !fileNext) return
+      // ↑/↓ switch between the files of the opened folder; they never page
+      // array items and do nothing unless a multi-file folder is open.
+      if (filePrevious || fileNext) {
+        // The queued request outranks the in-flight load, which outranks the
+        // last finished file — otherwise rapid presses collapse into one step.
+        const activeIndex = latestRequestedIndex(
+          pendingFolderIndexRef.current?.index ?? null,
+          loadingFolderIndexRef.current,
+          folder?.activeIndex
+        )
+        const decision = decideFileSwitch(
+          fileNext ? 'next' : 'previous',
+          folder ? { fileCount: folder.files.length, activeIndex } : null
+        )
+        if (decision.kind !== 'open') return
+        event.preventDefault()
+        openFromFolder(decision.index)
+        return
+      }
       const current = stateRef.current
       if (current.view !== 'array') return
-      const previous = event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'PageUp'
-      const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'PageDown'
-      if (!previous && !next) return
       event.preventDefault()
       setState((prev) => {
         if (prev.view !== 'array') return prev
@@ -180,7 +202,7 @@ export default function App(): React.ReactElement {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [folder, pickFolder])
+  }, [folder, openFromFolder, pickFolder])
 
   // Fetch the current item; a stale reply for an older index is discarded.
   const arrayIndex = state.view === 'array' ? state.index : -1

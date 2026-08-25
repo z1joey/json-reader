@@ -32,5 +32,6 @@ npm run typecheck
   the selected file. Search is folder-aware: results can come from any JSON
   file in the opened folder, and selecting a result jumps to that file.
 
-Keyboard: `⌘/Ctrl+O` opens a folder; `←/↑/PageUp` and `→/↓/PageDown` move
-between array items. Appearance follows the system light/dark setting.
+Keyboard: `⌘/Ctrl+O` opens a folder; `←/→/PageUp/PageDown` move between array
+items of the open file; with a folder holding more than one file, `↑/↓` move
+between its files. Appearance follows the system light/dark setting.
