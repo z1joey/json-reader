@@ -77,25 +77,12 @@ body {
   padding-left: 80px; /* room for the traffic lights */
 }
 
-.header-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
 .app-version {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
-}
-
-.file-name {
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Pin right even as the header's only in-flow child. */
+  margin-left: auto;
 }
 
 /* ── Search ─────────────────────────────────────────────────────────── */

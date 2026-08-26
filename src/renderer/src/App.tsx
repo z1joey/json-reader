@@ -244,13 +244,6 @@ export default function App(): React.ReactElement {
   return (
     <div className="app">
       <header className="header">
-        <div className="header-title">
-          {fileName && (
-            <span className="file-name" title={fileName}>
-              {fileName}
-            </span>
-          )}
-        </div>
         {(folder || (state.view === 'array' && state.count > 0)) && (
           <SearchBar
             key={folder ? `${folder.name}:${folder.files.join(',')}` : state.view === 'array' ? state.fileName : ''}
