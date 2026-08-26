@@ -30,6 +30,10 @@ function fileNameOf(state: State): string | null {
 export default function App(): React.ReactElement {
   const [state, setState] = useState<State>({ view: 'empty' })
   const [folder, setFolder] = useState<FolderState | null>(null)
+  const [version, setVersion] = useState('')
+  useEffect(() => {
+    void jsonReader.getVersion().then(setVersion)
+  }, [])
   const stateRef = useRef(state)
   stateRef.current = state
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -240,14 +244,6 @@ export default function App(): React.ReactElement {
   return (
     <div className="app">
       <header className="header">
-        <div className="header-title">
-          <span className="app-name">JSON Reader</span>
-          {fileName && (
-            <span className="file-name" title={fileName}>
-              {fileName}
-            </span>
-          )}
-        </div>
         {(folder || (state.view === 'array' && state.count > 0)) && (
           <SearchBar
             key={folder ? `${folder.name}:${folder.files.join(',')}` : state.view === 'array' ? state.fileName : ''}
@@ -255,6 +251,7 @@ export default function App(): React.ReactElement {
             onSelect={handleSearchSelect}
           />
         )}
+        {version && <span className="app-version">v{version}</span>}
       </header>
 
       <div className="body">

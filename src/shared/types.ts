@@ -65,4 +65,6 @@ export interface JsonReaderApi {
   search: (query: string) => Promise<SearchResponse>
   /** Fired when the user opens a folder via the menu (Cmd/Ctrl+O). */
   onOpenFolderRequested: (callback: () => void) => () => void
+  /** The app version declared in package.json (e.g. "0.1.0"). */
+  getVersion: () => Promise<string>
 }
