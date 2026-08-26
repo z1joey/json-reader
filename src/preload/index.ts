@@ -10,7 +10,8 @@ const api: JsonReaderApi = {
     const listener = (): void => callback()
     ipcRenderer.on('open-folder-requested', listener)
     return () => ipcRenderer.removeListener('open-folder-requested', listener)
-  }
+  },
+  getVersion: () => ipcRenderer.invoke('json:get-version')
 }
 
 contextBridge.exposeInMainWorld('jsonReader', api)

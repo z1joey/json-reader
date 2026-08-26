@@ -284,6 +284,8 @@ ipcMain.handle('json:search', (_event, query: unknown): Promise<SearchResponse> 
   return search
 })
 
+ipcMain.handle('json:get-version', (): string => app.getVersion())
+
 void app.whenReady().then(() => {
   buildMenu()
   createWindow()
