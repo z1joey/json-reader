@@ -1,5 +1,8 @@
 # JSON Reader
 
+[![CI](https://github.com/z1joey/json-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/z1joey/json-reader/actions/workflows/ci.yml)
+[![Release](https://github.com/z1joey/json-reader/actions/workflows/release.yml/badge.svg)](https://github.com/z1joey/json-reader/actions/workflows/release.yml)
+
 A minimal, read-only desktop viewer for JSON files, built for one job: making
 large JSON pleasant to read. Large root arrays are shown one item at a time
 with keyboard navigation; every other JSON value is rendered as a structured,
@@ -15,6 +18,35 @@ npm start        # launch the built app
 npm test         # unit tests for the JSON indexer
 npm run typecheck
 ```
+
+## Workflows
+
+Two GitHub Actions workflows live in `.github/workflows/`; run history is on
+the [Actions tab](https://github.com/z1joey/json-reader/actions).
+
+- **CI** (`ci.yml`) — runs on every push to `main` and every pull request:
+  installs dependencies, then typechecks, runs the unit tests, and does a
+  production build. Superseded runs on the same branch are cancelled
+  automatically.
+- **Release** (`release.yml`) — runs when a `v*` tag is pushed: verifies the
+  tag matches the version in `package.json`, re-runs typecheck and tests,
+  builds an unsigned macOS (Apple Silicon) `.dmg` with electron-builder, and
+  publishes it as a GitHub Release.
+
+## Releases
+
+The version in `package.json` is the single source of truth. To cut a
+release:
+
+1. Bump `version` in `package.json` and commit it.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+3. The Release workflow attaches `json-reader-0.2.0-arm64.dmg` to a GitHub
+   Release with generated notes.
+
+The dmg is unsigned, so macOS Gatekeeper warns on first launch: right-click
+the app and choose **Open** (only needed once), or run
+`xattr -cr /Applications/json-reader.app`. Re-releasing the same version
+requires deleting both the GitHub Release and its tag first.
 
 ## Architecture
 
