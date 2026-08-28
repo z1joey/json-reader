@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RootInfo, SearchHit } from '../../shared/types'
 import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
+import ItemPosition from './ItemPosition'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
 import { decideFileSwitch, latestRequestedIndex } from './fileSwitch'
@@ -240,6 +241,14 @@ export default function App(): React.ReactElement {
         ? { ...prev, index: prev.index + 1, item: { loading: true } }
         : prev
     )
+  // A jump to the position already shown must not restart the item load:
+  // the getItem effect keys on the index, so 'loading' would never clear.
+  const jumpTo = (index: number): void =>
+    setState((prev) =>
+      prev.view === 'array' && index >= 0 && index < prev.count && index !== prev.index
+        ? { ...prev, index, item: { loading: true } }
+        : prev
+    )
 
   return (
     <div className="app">
@@ -298,9 +307,7 @@ export default function App(): React.ReactElement {
           <button className="button" onClick={goPrevious} disabled={state.index === 0}>
             ← Previous
           </button>
-          <span className="position" aria-label={`Item ${state.index + 1} of ${state.count}`}>
-            {(state.index + 1).toLocaleString()} / {state.count.toLocaleString()}
-          </span>
+          <ItemPosition index={state.index} count={state.count} onJump={jumpTo} />
           <button className="button" onClick={goNext} disabled={state.index === state.count - 1}>
             Next →
           </button>

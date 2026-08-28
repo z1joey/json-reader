@@ -9,6 +9,7 @@
   --faint: #a2a2ab;
   --hairline: #e5e5eb;
   --hairline-strong: #d4d4dc;
+  --danger: #c92a2a;
   --accent: #3b5bdb;
   --key: #4c4c55;
   --num: #8a5a24;
@@ -25,6 +26,7 @@
     --faint: #5d5d68;
     --hairline: #2a2c34;
     --hairline-strong: #3a3d47;
+    --danger: #e5645f;
     --accent: #82a8ff;
     --key: #b4b4bf;
     --num: #d9a05b;
@@ -332,6 +334,33 @@ body {
   font-size: 12.5px;
   color: var(--muted);
   letter-spacing: 0.02em;
+}
+
+.position-input {
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 4px;
+  text-align: right;
+  /* content-box + normal spacing so the inline `width: Nch` is exactly N digits. */
+  box-sizing: content-box;
+  letter-spacing: normal;
+}
+
+.position-input:hover {
+  border-color: var(--hairline-strong);
+}
+
+.position-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.position-input.error {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 /* ── Controls ───────────────────────────────────────────────────────── */
