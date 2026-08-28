@@ -286,7 +286,9 @@ export default function App(): React.ReactElement {
           )}
           {state.view === 'value' && (
             <div className="doc">
-              <JsonView value={state.value} />
+              {/* Keyed so each file opens a fresh tree and fold/expand state
+                  never leaks from the previously viewed value. */}
+              <JsonView key={state.fileName} value={state.value} />
             </div>
           )}
           {state.view === 'array' &&
@@ -296,7 +298,8 @@ export default function App(): React.ReactElement {
               </div>
             ) : (
               <div className="doc">
-                <ItemBody item={state.item} />
+                {/* Keyed per item for the same reason as the value view. */}
+                <ItemBody key={`${state.fileName}:${state.index}`} item={state.item} />
               </div>
             ))}
         </main>
