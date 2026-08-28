@@ -7,3 +7,6 @@ dist/
 .mimosa/
 .vscode/
 .zcode/
+
+# local design specs
+docs/superpowers/specs/
