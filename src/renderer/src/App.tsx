@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RootInfo, SearchHit } from '../../shared/types'
 import { jsonReader } from './ipc'
 import FilePanel from './FilePanel'
+import ItemPosition from './ItemPosition'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
 import { decideFileSwitch, latestRequestedIndex } from './fileSwitch'
@@ -113,7 +114,13 @@ export default function App(): React.ReactElement {
       if (decision.kind === 'open') {
         openFromFolder(decision.index, decision.itemIndex)
       } else if (decision.kind === 'jump') {
-        setState((prev) => (prev.view === 'array' ? { ...prev, index: decision.itemIndex, item: { loading: true } } : prev))
+        // A hit for the item already shown must not set loading: the getItem
+        // effect keys on the index, so 'loading' would never clear.
+        setState((prev) =>
+          prev.view === 'array' && decision.itemIndex !== prev.index
+            ? { ...prev, index: decision.itemIndex, item: { loading: true } }
+            : prev
+        )
       }
     },
     [folder, openFromFolder]
@@ -240,6 +247,14 @@ export default function App(): React.ReactElement {
         ? { ...prev, index: prev.index + 1, item: { loading: true } }
         : prev
     )
+  // A jump to the position already shown must not restart the item load:
+  // the getItem effect keys on the index, so 'loading' would never clear.
+  const jumpTo = (index: number): void =>
+    setState((prev) =>
+      prev.view === 'array' && index >= 0 && index < prev.count && index !== prev.index
+        ? { ...prev, index, item: { loading: true } }
+        : prev
+    )
 
   return (
     <div className="app">
@@ -277,7 +292,10 @@ export default function App(): React.ReactElement {
           )}
           {state.view === 'value' && (
             <div className="doc">
-              <JsonView value={state.value} />
+              {/* Keyed by origin + name so each file opens a fresh tree and
+                  fold/expand state never leaks from a same-named file in
+                  another folder (or a single-file pick). */}
+              <JsonView key={`${folder?.name ?? 'file'}:${state.fileName}`} value={state.value} />
             </div>
           )}
           {state.view === 'array' &&
@@ -287,7 +305,8 @@ export default function App(): React.ReactElement {
               </div>
             ) : (
               <div className="doc">
-                <ItemBody item={state.item} />
+                {/* Keyed per origin+file+item for the same reason as the value view. */}
+                <ItemBody key={`${folder?.name ?? 'file'}:${state.fileName}:${state.index}`} item={state.item} />
               </div>
             ))}
         </main>
@@ -298,9 +317,7 @@ export default function App(): React.ReactElement {
           <button className="button" onClick={goPrevious} disabled={state.index === 0}>
             ← Previous
           </button>
-          <span className="position" aria-label={`Item ${state.index + 1} of ${state.count}`}>
-            {(state.index + 1).toLocaleString()} / {state.count.toLocaleString()}
-          </span>
+          <ItemPosition index={state.index} count={state.count} onJump={jumpTo} />
           <button className="button" onClick={goNext} disabled={state.index === state.count - 1}>
             Next →
           </button>
