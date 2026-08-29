@@ -17,7 +17,7 @@ const { appMock, browserWindowMock, dialogMock, ipcMainMock, menuMock } = vi.hoi
       show: vi.fn(),
       loadFile: vi.fn(),
       loadURL: vi.fn(),
-      webContents: { on: vi.fn(), send: vi.fn() }
+      webContents: { on: vi.fn(), send: vi.fn(), setWindowOpenHandler: vi.fn() }
     }
   }),
   dialogMock: { showOpenDialog: vi.fn() },
@@ -196,6 +196,22 @@ describe('open folder', () => {
     // must surface so the "refine your search" hint appears.
     expect(result.hits.length).toBe(10)
     expect(result.moreAvailable).toBe(true)
+  })
+
+  it('cancels an in-flight folder search when another folder is opened', async () => {
+    // The scan reads thousands of elements one await at a time, so it is
+    // still running when the second, single-file folder opens and retires
+    // it. The pending search must resolve as canceled — not reject with a
+    // TypeError from the replaced (null) folder file list.
+    const many = Array.from({ length: 2000 }, (_, i) => `{"word": "apple ${i}"}`).join(',')
+    const folder = await folderFixture('search-race', { 'a.json': `[${many}]`, 'b.json': '[{"word": "apple"}]' })
+    pick(folder)
+    await openFolder()
+    const pending = search('apple')
+    const lone = await folderFixture('search-race-lone', { 'only.json': '[1]' })
+    pick(lone)
+    expect((await openFolder()).status).toBe('ok')
+    await expect(pending).resolves.toEqual({ status: 'canceled' })
   })
 
   // Unlinking a file with an open handle only works on POSIX; on Windows the

@@ -290,6 +290,41 @@ describe('search', () => {
     }
   })
 
+  it('reveals better-ranked matches when an incomplete memo narrows', async () => {
+    // 'ap' fills the memo with ten prefix matches and reports more
+    // available; the two exact 'apricot' items fell out of that top ten.
+    // Extending to 'apricot' must not trust the incomplete memo — a full
+    // scan has to bring the exact matches back.
+    const items = [
+      ...Array.from({ length: 10 }, (_, i) => ({ w: `apricot pie ${i}` })),
+      { w: 'apricot' },
+      { w: 'apricot' }
+    ]
+    const file = await JsonFile.open(await fixture('search-memo-incomplete.json', JSON.stringify(items)))
+    const first = (await file.search('ap')) as { hits: Array<{ index: number }>; moreAvailable: boolean }
+    expect(first.hits.map((h) => h.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(first.moreAvailable).toBe(true)
+    const second = (await file.search('apricot')) as { hits: Array<{ index: number; tier: number }> }
+    expect(second.hits[0]).toMatchObject({ index: 10, tier: 1 })
+    expect(second.hits[1]).toMatchObject({ index: 11, tier: 1 })
+    expect(second.hits).toHaveLength(10)
+    await file.close()
+  })
+
+  it('orders memo-narrowed hits by tier like a full scan', async () => {
+    // 'app' matches ten elements without dropping any, so 'apple' narrows
+    // through the memo. Its one exact match (index 9) must come first; the
+    // memo's old element order would leave it last.
+    const items = [...Array.from({ length: 9 }, (_, i) => ({ w: `apple pie ${i}` })), { w: 'apple' }]
+    const file = await JsonFile.open(await fixture('search-memo-order.json', JSON.stringify(items)))
+    await file.search('app')
+    const narrowed = (await file.search('apple')) as { hits: Array<{ index: number; tier: number }>; moreAvailable: boolean }
+    expect(narrowed.hits.map((h) => h.index)).toEqual([9, 0, 1, 2, 3, 4, 5, 6, 7, 8])
+    expect(narrowed.hits[0].tier).toBe(1)
+    expect(narrowed.moreAvailable).toBe(false)
+    await file.close()
+  })
+
   it('never classifies object keys as value matches', async () => {
     const file = await JsonFile.open(
       await fixture('search-keys.json', JSON.stringify([{ apple: 1 }, { w: 'apple' }, { 'apple pie': 2 }]))
@@ -403,6 +438,19 @@ describe('invalid input', () => {
   it('rejects characters after the root value', async () => {
     const path = await fixture('trailing.json', '{"a": 1} x')
     await expect(JsonFile.open(path)).rejects.toThrow(/after/i)
+  })
+
+  it('rejects characters after an array root, in the same chunk', async () => {
+    // The ']' used to end the scan at the end of its whole chunk, so garbage
+    // after it in the same chunk was never inspected.
+    const same = await fixture('trailing-array.json', '[1, 2] x')
+    await expect(JsonFile.open(same)).rejects.toThrow(/after/i)
+    const empty = await fixture('trailing-empty-array.json', '[] garbage')
+    await expect(JsonFile.open(empty)).rejects.toThrow(/after/i)
+    // With the ']' last byte of its chunk, the garbage lands in the next
+    // one and must still be rejected.
+    const next = await fixture('trailing-array-next-chunk.json', '[1, 2] x')
+    await expect(JsonFile.open(next, { chunkSize: 6 })).rejects.toThrow(/after/i)
   })
 
   it('rejects an empty slot between commas', async () => {
