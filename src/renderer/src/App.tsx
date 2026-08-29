@@ -114,7 +114,13 @@ export default function App(): React.ReactElement {
       if (decision.kind === 'open') {
         openFromFolder(decision.index, decision.itemIndex)
       } else if (decision.kind === 'jump') {
-        setState((prev) => (prev.view === 'array' ? { ...prev, index: decision.itemIndex, item: { loading: true } } : prev))
+        // A hit for the item already shown must not set loading: the getItem
+        // effect keys on the index, so 'loading' would never clear.
+        setState((prev) =>
+          prev.view === 'array' && decision.itemIndex !== prev.index
+            ? { ...prev, index: decision.itemIndex, item: { loading: true } }
+            : prev
+        )
       }
     },
     [folder, openFromFolder]
@@ -286,9 +292,10 @@ export default function App(): React.ReactElement {
           )}
           {state.view === 'value' && (
             <div className="doc">
-              {/* Keyed so each file opens a fresh tree and fold/expand state
-                  never leaks from the previously viewed value. */}
-              <JsonView key={state.fileName} value={state.value} />
+              {/* Keyed by origin + name so each file opens a fresh tree and
+                  fold/expand state never leaks from a same-named file in
+                  another folder (or a single-file pick). */}
+              <JsonView key={`${folder?.name ?? 'file'}:${state.fileName}`} value={state.value} />
             </div>
           )}
           {state.view === 'array' &&
@@ -298,8 +305,8 @@ export default function App(): React.ReactElement {
               </div>
             ) : (
               <div className="doc">
-                {/* Keyed per item for the same reason as the value view. */}
-                <ItemBody key={`${state.fileName}:${state.index}`} item={state.item} />
+                {/* Keyed per origin+file+item for the same reason as the value view. */}
+                <ItemBody key={`${folder?.name ?? 'file'}:${state.fileName}:${state.index}`} item={state.item} />
               </div>
             ))}
         </main>
