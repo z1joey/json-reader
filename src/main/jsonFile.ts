@@ -270,11 +270,13 @@ export class JsonFile {
     if (needle.length === 0) return { hits: [], moreAvailable: false }
     const isCanceled = options.isCanceled ?? (() => false)
 
-    // A longer query can only match inside the previous query's matches.
-    // Re-verify those few elements instead of rescanning the whole file;
-    // fall back to a full scan when too few survive.
+    // A longer query can only match inside the previous query's matches, so
+    // when the previous scan was complete its indices are every candidate
+    // and re-verifying them is exact. A memo that dropped matches (its scan
+    // hit the limit) is incomplete: the new query's best-ranked hits may
+    // live in elements it never kept, so a full scan must run instead.
     const memo = this.searchMemo
-    if (memo && needle.startsWith(memo.query)) {
+    if (memo && needle.startsWith(memo.query) && !memo.moreAvailable) {
       const verified: SearchHitBase[] = []
       for (const index of memo.indices) {
         if (isCanceled()) return null
@@ -290,11 +292,12 @@ export class JsonFile {
           ...makeSnippet(text, found.at, needle.length)
         })
       }
-      // The memo cannot know about matches its source scan never saw, so it
-      // can never turn a `false` into a `true`.
-      if (verified.length >= SEARCH_LIMIT) {
-        return { hits: verified.slice(0, SEARCH_LIMIT), moreAvailable: memo.moreAvailable }
-      }
+      // The memo is complete, so verified holds every match; order it like
+      // the full scan would (tier first, then element order) and memo the
+      // narrowed result so the next keystroke narrows from it.
+      verified.sort((a, b) => a.tier - b.tier || a.index - b.index)
+      this.searchMemo = { query: needle, indices: verified.map((hit) => hit.index), moreAvailable: false }
+      return { hits: verified, moreAvailable: false }
     }
 
     type Pick = { index: number; tier: SearchTier; at: number }
@@ -465,7 +468,8 @@ export class JsonFile {
               primLine = line
             }
           }
-        } else if (byte === QUOTE) {          if (topLevel()) {
+        } else if (byte === QUOTE) {
+          if (topLevel()) {
             if (needComma || state === 'primitive' || elementDone) fail()
             state = 'string'
             elemStart = pos
@@ -487,6 +491,10 @@ export class JsonFile {
             // exists ([1,] and [,] are the illegal combinations).
             if (!needComma && this.starts.length > 0) fail()
             rootClosed = true
+            // Resume the trailing-content check right after ']' — not at the
+            // end of this chunk, where filePos already points — so garbage in
+            // the same chunk is still seen.
+            filePos = pos + 1
             break scan
           }
           if (stack.length === baseDepth() && state === 'container') finishElement(pos + 1)

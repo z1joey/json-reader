@@ -21,6 +21,8 @@ type FolderSearchEntry = { file: JsonFile | null; text: string | null }
 const folderSearchCache = new Map<string, FolderSearchEntry>()
 
 async function clearFolderSearchCache(): Promise<void> {
+  // Any folder change invalidates folder scans still in flight.
+  searchSeq++
   const entries = [...folderSearchCache.values()]
   folderSearchCache.clear()
   await Promise.all(entries.map((entry) => entry.file?.close().catch(() => {})))
@@ -46,11 +48,18 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // A new window starts from a clean slate: drop every folder artifact,
+    // including the search cache's open file handles.
+    currentFileName = null
+    currentFolderFiles = null
     void closeCurrentFile()
+    void clearFolderSearchCache()
   })
   mainWindow.on('ready-to-show', () => mainWindow?.show())
-  // The renderer is a local, read-only view; it never navigates anywhere.
+  // The renderer is a local, read-only view; it never navigates anywhere
+  // and never opens windows of its own.
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -184,11 +193,14 @@ ipcMain.handle('json:get-item', (_event, index: unknown): Promise<ItemResponse> 
 })
 
 async function searchCurrentFile(query: string, isCanceled: () => boolean): Promise<SearchResponse> {
-  if (!currentFile || !currentFile.searchable) return { status: 'unsupported' }
+  // Snapshot the file and its name: a file switch mid-search must neither
+  // crash the old scan nor relabel its hits with the new file's name.
+  const file = currentFile
+  const fileName = currentFileName ?? ''
+  if (!file || !file.searchable) return { status: 'unsupported' }
   try {
-    const result = await currentFile.search(query, { isCanceled })
+    const result = await file.search(query, { isCanceled })
     if (result === null) return { status: 'canceled' }
-    const fileName = currentFileName ?? ''
     return {
       status: 'ok',
       hits: result.hits.map((hit) => ({ ...hit, fileIndex: 0, fileName })),
@@ -203,7 +215,11 @@ async function searchCurrentFile(query: string, isCanceled: () => boolean): Prom
 }
 
 async function searchFolder(query: string, isCanceled: () => boolean): Promise<SearchResponse> {
-  if (!currentFolderFiles || currentFolderFiles.length === 0) return { status: 'unsupported' }
+  // Snapshot the list: opening another folder while this scan runs replaces
+  // currentFolderFiles (possibly with null), and this scan must not follow
+  // the switch — its cancellation flag settles it instead.
+  const files = currentFolderFiles
+  if (!files || files.length === 0) return { status: 'unsupported' }
   const hits: SearchHit[] = []
   let moreAvailable = false
 
@@ -221,9 +237,9 @@ async function searchFolder(query: string, isCanceled: () => boolean): Promise<S
     }
   }
 
-  for (let fileIndex = 0; fileIndex < currentFolderFiles.length; fileIndex++) {
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     if (isCanceled()) return { status: 'canceled' }
-    const path = currentFolderFiles[fileIndex]
+    const path = files[fileIndex]
     const fileName = basename(path)
 
     // Reuse the entry from previous searches so array roots keep their fd,

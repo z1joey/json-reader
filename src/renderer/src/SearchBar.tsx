@@ -56,16 +56,18 @@ export default function SearchBar({ inputRef, onSelect }: Props): React.ReactEle
     setOpen(true)
     const id = ++seqRef.current
     const timer = setTimeout(async () => {
-      const result = await jsonReader.search(trimmed)
+      // A rejected call (search handler crashed, window closing) behaves
+      // like a canceled search: keep the previous list on screen.
+      const result = await jsonReader.search(trimmed).catch(() => null)
       if (seqRef.current !== id) return
       setSearching(false)
-      if (result.status === 'ok') {
+      if (result?.status === 'ok') {
         setHits(result.hits)
         setMoreAvailable(result.moreAvailable)
         setNoMatches(result.hits.length === 0)
         setActive(result.hits.length > 0 ? 0 : -1)
       }
-      // 'canceled' and 'error' keep the previous result list on screen.
+      // 'canceled', 'error', and rejections keep the previous result list.
     }, DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [query])
