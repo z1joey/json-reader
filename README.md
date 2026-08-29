@@ -12,6 +12,8 @@ dumps, logs, datasets — are shown one item at a time with keyboard paging, so
 even multi-gigabyte files open instantly. Every other JSON value is rendered
 as a structured, human-readable document.
 
+![JSON Reader with a folder of dictionary files open: the sidebar lists the folder's JSON files, a nested entry is rendered with foldable groups, and the pager shows item 99 of 2,077](assets/screenshot.png)
+
 ## Highlights
 
 - **Huge array files, opened instantly.** The file is streamed once through a
