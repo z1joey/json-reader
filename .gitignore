@@ -4,3 +4,9 @@ dist/
 *.log
 .DS_Store
 .trae/
+.mimosa/
+.vscode/
+.zcode/
+
+# local design specs
+docs/superpowers/specs/
