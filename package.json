@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:mac": "electron-vite build && electron-builder --mac --publish never",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
