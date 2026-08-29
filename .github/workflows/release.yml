@@ -44,5 +44,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="> This build is unsigned, so macOS Gatekeeper warns on first launch. Right-click the app and choose **Open**, or run \`xattr -cr /Applications/json-reader.app\`."
+          notes="> This build is ad-hoc signed and not notarized, so macOS Gatekeeper warns on first launch — recent macOS may even say the app is damaged. It is not. Run \`xattr -cr /Applications/json-reader.app\` once after installing, or use Open Anyway in System Settings → Privacy & Security."
           gh release create "$GITHUB_REF_NAME" dist/*.dmg --title "$GITHUB_REF_NAME" --notes "$notes" --generate-notes

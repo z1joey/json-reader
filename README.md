@@ -46,9 +46,17 @@ Grab the latest `json-reader-<version>-arm64.dmg` from the
 Apple Silicon). Prebuilt packages currently cover macOS only; on Intel Macs,
 Windows, or Linux, [run it from source](#development) instead.
 
-The build is unsigned, so macOS Gatekeeper warns on first launch: right-click
-the app and choose **Open** (only needed once), or run
-`xattr -cr /Applications/json-reader.app`.
+The build carries an ad-hoc signature and is not notarized, so macOS
+Gatekeeper warns on first launch — recent macOS versions may even claim the
+app "is damaged". It isn't; the warning only reflects the missing Apple
+notarization. After moving the app to `/Applications`, clear the download
+quarantine once:
+
+```sh
+xattr -cr /Applications/json-reader.app
+```
+
+Alternatively, use **Open Anyway** in System Settings → Privacy & Security.
 
 ## Keyboard shortcuts
 
