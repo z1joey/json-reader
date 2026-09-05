@@ -85,6 +85,8 @@ final class AppModel {
     /// Bumped whenever the search field should take focus (⌘F).
     var searchFocusToken = 0
     let version: String
+    /// Comments of the currently open file (one persisted store per file).
+    let comments: CommentStore
 
     @ObservationIgnored private var currentFile: JsonFile?
     @ObservationIgnored private var currentFileName: String?
@@ -100,10 +102,12 @@ final class AppModel {
     // Replies for an item of a previously opened file are discarded.
     @ObservationIgnored private var fileGeneration = 0
     @ObservationIgnored private var keyMonitor: Any?
+    @ObservationIgnored private var reconcileTasks: [Task<Void, Never>] = []
     @ObservationIgnored var showsOpenPanel: () async -> String? = AppModel.defaultOpenPanel
 
-    init() {
+    init(commentsDirectory: URL = CommentStore.defaultDirectory) {
         version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        comments = CommentStore(directory: commentsDirectory)
     }
 
     // MARK: - Opening
@@ -223,18 +227,35 @@ final class AppModel {
             currentFile = file
             currentFileName = fileName
             fileGeneration += 1
+            comments.load(filePath: path)
+            reconcileComments(for: file, path: path)
             return .ok(fileName: fileName, root: await file.root)
         } catch {
             currentFile = nil
             currentFileName = nil
+            comments.unload()
             let message = (error as? JsonError)?.message ?? "The file could not be read."
             return .error(fileName: fileName, message: message)
         }
     }
 
+    /// Drops comments whose entity no longer exists in the freshly opened
+    /// file. The task is harmless if the user moves on to another file: the
+    /// store only applies removals while it still belongs to this file.
+    private func reconcileComments(for file: JsonFile, path: String) {
+        reconcileTasks.append(Task { await comments.reconcile(with: file, filePath: path) })
+    }
+
+    /// Waits for the reconciles of already-opened files (test support).
+    func awaitPendingReconciles() async {
+        for task in reconcileTasks { await task.value }
+        reconcileTasks.removeAll()
+    }
+
     private func closeCurrentFile() async {
         if let file = currentFile {
             currentFile = nil
+            comments.unload()
             await file.close()
         }
     }

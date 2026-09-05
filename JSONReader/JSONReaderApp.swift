@@ -8,6 +8,7 @@ struct JSONReaderApp: App {
         WindowGroup("JSON Reader", id: "main") {
             ContentView()
                 .environment(model)
+                .environment(model.comments)
                 .frame(minWidth: 640, minHeight: 480)
                 .onAppear {
                     model.installKeyMonitor()

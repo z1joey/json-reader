@@ -33,11 +33,17 @@ as a structured, human-readable document.
   large groups start collapsed so an item opens as a readable overview
   instead of a wall. Each nesting level carries a thin depth-colored rule,
   and very long strings are truncated with a *Show all* button.
+- **Comments that stick.** Right-click any value, group header, or item to
+  add a note; edit or remove it from the same menu or from the badge that
+  marks annotated nodes. Comments are stored per JSON file — one small store
+  file each, in Application Support, addressed by RFC 6901 JSON Pointer — so
+  they survive restarts and never mix between files. When the node a comment
+  annotates disappears from the file, the comment is deleted with it.
 - **Keyboard-first.** Page through items, jump to an item by number, switch
   files, and search without touching the mouse.
 - **Native and quiet.** A single SwiftUI window; light/dark follows the
-  system setting; object keys keep their document order; the file is only
-  ever read, never written.
+  system setting; object keys keep their document order; your JSON files are
+  only ever read, never written.
 
 ## Download
 
@@ -100,9 +106,17 @@ open build/DerivedData/Build/Products/Debug/JSONReader.app --args -folder /some/
 - **Logic** (`JSONReader/Logic`) — pure, UI-free decision rules: item-jump
   validation, the fold policy for large groups, file switching, and what
   picking a search hit should do.
+- **Comments** (`JSONReader/Comments`) — `CommentStore` persists one comments
+  file per opened JSON file under
+  `~/Library/Application Support/com.z1joey.json-reader/comments/`, named by
+  the SHA-256 of the file's absolute path so files can never collide, and
+  writes atomically on every change. `CommentReconciler` re-resolves each
+  stored pointer against the file on open (parsing only the referenced items
+  of huge arrays) and drops the comments whose nodes are gone.
 - **Views** (`JSONReader/Views`) — the SwiftUI surface: split view with the
   file sidebar, the recursive foldable JSON tree, the pager with its editable
-  item position, and the search field with its results dropdown.
+  item position, the search field with its results dropdown, and the comment
+  badges, context menus, and editor.
 - **AppModel** (`JSONReader/AppModel.swift`) — the reading session: folder
   state, file loading with last-write-wins queuing, item loads, search
   orchestration, and the global keyboard handling.
@@ -112,7 +126,9 @@ open build/DerivedData/Build/Products/Debug/JSONReader.app --args -folder /some/
 The ported behavioral suite lives in `JSONReaderTests` (Swift Testing): the
 byte scanner (chunk boundaries, BOMs, multibyte content, malformed input
 line numbers), search ranking/memoization/cancellation, folder listing and
-folder-wide search caches, JSON pointer resolution, and the pure logic rules.
+folder-wide search caches, JSON pointer resolution, the pure logic rules,
+and the comment store (per-file isolation, persistence, and the
+entity-deleted → comment-deleted cascade).
 
 ### CI and releases
 

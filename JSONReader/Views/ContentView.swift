@@ -60,6 +60,7 @@ struct SidebarView: View {
 
 struct DetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(CommentStore.self) private var comments
 
     /// Search state resets when the search scope (folder or file) changes.
     private var searchScope: String {
@@ -82,6 +83,22 @@ struct DetailView: View {
                 PagerBar(index: index, count: count)
             }
         }
+        .sheet(item: Binding(
+            get: { comments.editing },
+            set: { comments.editing = $0 }
+        )) { editing in
+            CommentEditorSheet(editing: editing)
+                .environment(comments)
+        }
+        .alert(
+            "Comments could not be saved",
+            isPresented: Binding(
+                get: { comments.lastError != nil },
+                set: { if !$0 { comments.lastError = nil } }
+            ),
+            actions: { Button("OK", role: .cancel) {} },
+            message: { Text(comments.lastError ?? "") }
+        )
     }
 
     private var header: some View {
@@ -124,7 +141,9 @@ struct DetailView: View {
                     Text("This array is empty.").foregroundStyle(.secondary)
                 }
             } else {
-                ItemBodyView(item: item)
+                // The tree's root pointer is this item's document pointer,
+                // so comments made inside it address "/<item>/...".
+                ItemBodyView(item: item, basePointer: "/\(index)")
                     .id("\(treeScope):\(fileName):\(index)")
             }
         }
@@ -133,6 +152,7 @@ struct DetailView: View {
 
 struct ItemBodyView: View {
     let item: ItemState
+    var basePointer = ""
 
     var body: some View {
         switch item {
@@ -144,7 +164,7 @@ struct ItemBodyView: View {
         case .error(let message):
             ErrorStateView(message: message, offersOpen: false)
         case .value(let value):
-            JsonTreeView(value: value)
+            JsonTreeView(value: value, basePointer: basePointer)
         }
     }
 }
