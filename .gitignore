@@ -1,6 +1,11 @@
 node_modules/
 out/
 dist/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.profraw
 *.log
 .DS_Store
 .trae/

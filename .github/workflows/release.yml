@@ -17,32 +17,24 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Set up Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 22
-          cache: npm
-      - name: Verify tag matches package.json version
+      - name: Verify tag matches MARKETING_VERSION
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          pkg_version="$(node -p "require('./package.json').version")"
+          pkg_version="$(grep -m1 'MARKETING_VERSION' JSONReader.xcodeproj/project.pbxproj | sed -E 's/.*= ?"?([0-9a-zA-Z.]+)"?;/\1/')"
           if [ "$tag_version" != "$pkg_version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $pkg_version"
+            echo "::error::Tag $GITHUB_REF_NAME does not match MARKETING_VERSION $pkg_version"
             exit 1
           fi
-      - name: Install dependencies
-        run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
       - name: Test
-        run: npm test
-      - name: Build dmg
-        run: npm run dist:mac
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: >
+          xcodebuild -project JSONReader.xcodeproj -scheme JSONReader
+          -configuration Debug -derivedDataPath build/DerivedData
+          -destination 'platform=macOS' test
+      - name: Build universal dmg
+        run: ./scripts/make-dmg.sh
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="> This build is ad-hoc signed and not notarized, so macOS Gatekeeper warns on first launch — recent macOS may even say the app is damaged. It is not. Run \`xattr -cr /Applications/json-reader.app\` once after installing, or use Open Anyway in System Settings → Privacy & Security."
+          notes="> This build is ad-hoc signed and not notarized, so macOS Gatekeeper warns on first launch — recent macOS may even say the app is damaged. It is not. Run \`xattr -cr \"/Applications/JSONReader.app\"\` once after installing, or use Open Anyway in System Settings → Privacy & Security."
           gh release create "$GITHUB_REF_NAME" dist/*.dmg --title "$GITHUB_REF_NAME" --notes "$notes" --generate-notes
