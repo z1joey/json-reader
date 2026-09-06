@@ -8,10 +8,13 @@ let longStringThreshold = 5000
 /// summary and carry a thin depth-colored rule instead of deep indentation.
 struct JsonTreeView: View {
     let value: JsonValue
+    /// Document pointer of the rendered root: "" for a value root, "/<n>"
+    /// when one array item is shown, so comments address the whole document.
+    var basePointer = ""
 
     var body: some View {
         ScrollView {
-            JsonNodeView(value: value, pointer: "", depth: 0)
+            JsonNodeView(value: value, pointer: basePointer, depth: 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
                 .textSelection(.enabled)
@@ -31,20 +34,25 @@ struct JsonNodeView: View {
             Text("null")
                 .foregroundStyle(.secondary)
                 .italic()
+                .commentable(pointer)
         case .bool(let flag):
             Text(flag ? "true" : "false")
                 .foregroundStyle(.orange)
+                .commentable(pointer)
         case .number(let number):
             Text(JsonValue.formatNumber(number))
                 .foregroundStyle(.blue)
                 .monospacedDigit()
+                .commentable(pointer)
         case .string(let text):
             LongStringView(text: text)
+                .commentable(pointer)
         case .array(let items):
             if items.isEmpty {
                 EmptyLabel(text: "Empty array")
+                    .commentable(pointer)
             } else {
-                GroupView(kind: .array, count: items.count, depth: depth) {
+                GroupView(kind: .array, count: items.count, depth: depth, pointer: pointer) {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(items.indices, id: \.self) { index in
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -65,8 +73,9 @@ struct JsonNodeView: View {
         case .object(let members):
             if members.isEmpty {
                 EmptyLabel(text: "Empty object")
+                    .commentable(pointer)
             } else {
-                GroupView(kind: .object, count: members.count, depth: depth) {
+                GroupView(kind: .object, count: members.count, depth: depth, pointer: pointer) {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(members.indices, id: \.self) { index in
                             FieldRow(key: members[index].key, isContainer: members[index].value.isNonEmptyContainer) {
@@ -131,13 +140,16 @@ struct GroupView<Content: View>: View {
     let kind: Kind
     let count: Int
     let depth: Int
+    /// Document pointer of this group, for comments.
+    let pointer: String
     @ViewBuilder let content: () -> Content
     @State private var isOpen: Bool
 
-    init(kind: Kind, count: Int, depth: Int, @ViewBuilder content: @escaping () -> Content) {
+    init(kind: Kind, count: Int, depth: Int, pointer: String, @ViewBuilder content: @escaping () -> Content) {
         self.kind = kind
         self.count = count
         self.depth = depth
+        self.pointer = pointer
         self.content = content
         _isOpen = State(initialValue: !ReadingRules.shouldCollapse(count: count))
     }
@@ -167,6 +179,7 @@ struct GroupView<Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .commentable(pointer)
             .accessibilityLabel(summary)
             .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : [.isButton])
 
