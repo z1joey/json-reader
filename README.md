@@ -28,6 +28,14 @@ as a structured, human-readable document.
   value prefixes, then any occurrence. Results show the file, the enclosing
   field, a highlighted snippet, and the item number; picking a result opens
   that file and jumps to that item.
+- **Annotations for errors worth keeping.** While reading, hover any value
+  and press *Annotate* — or use *Annotate Error* on an item or file that
+  fails to load — and the location is recorded in a sidecar
+  `<file>.annotations.json` next to the source: the array item, the JSON
+  path, the line, the byte offset, and a raw excerpt of the value. Each
+  source file gets its own sidecar, sidecars never appear in the file list,
+  annotated spots stay highlighted in the reader, and pressing the control
+  again removes the annotation.
 - **A reader, not an editor.** Objects read as label/value entries, arrays as
   numbered lists, and nested groups fold behind a count summary — unusually
   large groups start collapsed so an item opens as a readable overview
@@ -95,7 +103,9 @@ npm run typecheck
   false`, and `sandbox: true`.
 - **Renderer** (`src/renderer`) — React app; renders the current value only.
   Search is folder-aware: results can come from any JSON file in the opened
-  folder, and selecting a result jumps to that file.
+  folder, and selecting a result jumps to that file. Annotations are stored
+  by the main process in sidecar files; the renderer only decides where the
+  reader clicked.
 - **Shared** (`src/shared`) — IPC response shapes used by both sides.
 
 ### CI and releases

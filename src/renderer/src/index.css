@@ -14,6 +14,8 @@
   --key: #4c4c55;
   --num: #8a5a24;
   --bool: #6d5bd0;
+  --highlight: #fff3bf;
+  --highlight-edge: #f5e39a;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
 }
 
@@ -31,6 +33,8 @@
     --key: #b4b4bf;
     --num: #d9a05b;
     --bool: #a795f5;
+    --highlight: rgba(255, 213, 79, 0.16);
+    --highlight-edge: rgba(255, 213, 79, 0.34);
   }
 }
 
@@ -489,6 +493,14 @@ kbd {
   gap: 4px;
 }
 
+/* The label row: key on the left, annotate control on the right. */
+.jv-key-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .jv-key {
   font-size: 11px;
   font-weight: 600;
@@ -650,6 +662,84 @@ kbd {
 .jv-more:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ── Annotations ────────────────────────────────────────────────────── */
+
+/* An annotated entry reads as if marked with a highlighter; the padding +
+   negative margin keeps the highlight from shifting the text layout. */
+.jv-annotated {
+  background: var(--highlight);
+  box-shadow: 0 0 0 1px var(--highlight-edge);
+  border-radius: 6px;
+}
+
+.jv-field.jv-annotated {
+  padding: 2px 8px;
+  margin: -2px -8px;
+}
+
+.jv-list > li.jv-annotated {
+  margin: 0 -8px;
+  padding-right: 8px;
+}
+
+.jv-list > li > .annotate-control {
+  position: absolute;
+  right: 8px;
+  top: 0;
+}
+
+/* The per-entry control: invisible until the entry is hovered, except on
+   annotated entries where the ✕ stays available. */
+.annotate-control {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 5px;
+  padding: 1px 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.jv-field:hover > .jv-key-row > .annotate-control,
+.jv-list > li:hover > .annotate-control,
+.annotate-control:focus-visible,
+.annotate-control.remove {
+  opacity: 1;
+}
+
+.annotate-control:hover {
+  color: var(--fg);
+  border-color: var(--faint);
+}
+
+.annotate-control.remove {
+  color: var(--danger);
+}
+
+.annotate-control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* An annotated error message keeps the same highlighter treatment. */
+.error-message.annotated {
+  background: var(--highlight);
+  box-shadow: 0 0 0 1px var(--highlight-edge);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+
+.error-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* ── Scrollbars ─────────────────────────────────────────────────────── */

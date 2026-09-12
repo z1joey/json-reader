@@ -1,12 +1,42 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { JsonFile, JsonError, searchText } from './jsonFile'
-import type { ItemResponse, OpenFileResponse, OpenResponse, SearchHit, SearchResponse } from '../shared/types'
+import {
+  annotationFilePathFor,
+  annotationIdAt,
+  byteOffsetAt,
+  excerpt,
+  isAnnotationFileName,
+  lineAt,
+  locateValue,
+  MAX_ANNOTATION_TARGET_BYTES,
+  newAnnotation,
+  parseAnnotationRequest,
+  queueSidecarWrite,
+  readAnnotationList,
+  withAnnotation,
+  withoutAnnotation,
+  writeAnnotationList
+} from './annotations'
+import type {
+  Annotation,
+  AnnotationList,
+  AnnotationsResponse,
+  ItemResponse,
+  JsonPath,
+  OpenFileResponse,
+  OpenResponse,
+  SearchHit,
+  SearchResponse
+} from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let currentFile: JsonFile | null = null
 let currentFileName: string | null = null
+// Full path of the file the reader is on — kept even when the file failed to
+// open, because an unreadable file is exactly the kind worth annotating.
+let currentFilePath: string | null = null
 let currentFolderFiles: string[] | null = null
 let searchSeq = 0
 
@@ -51,6 +81,7 @@ function createWindow(): void {
     // A new window starts from a clean slate: drop every folder artifact,
     // including the search cache's open file handles.
     currentFileName = null
+    currentFilePath = null
     currentFolderFiles = null
     void closeCurrentFile()
     void clearFolderSearchCache()
@@ -104,6 +135,7 @@ async function closeCurrentFile(): Promise<void> {
 /** Opens `path` as the current file, replacing whatever was open before. */
 async function openJsonFile(path: string): Promise<OpenFileResponse> {
   const fileName = basename(path)
+  currentFilePath = path
   try {
     await closeCurrentFile()
     const file = await JsonFile.open(path)
@@ -114,7 +146,8 @@ async function openJsonFile(path: string): Promise<OpenFileResponse> {
     currentFile = null
     currentFileName = null
     const message = err instanceof JsonError ? err.message : 'The file could not be read.'
-    return { status: 'error', fileName, error: message }
+    // The path is kept: a file that fails to open can still be annotated.
+    return { status: 'error', fileName, error: message, annotatable: true }
   }
 }
 
@@ -127,10 +160,19 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
   try {
     const entries = await readdir(path, { withFileTypes: true })
     names = entries
-      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.json$/i.test(entry.name))
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          !entry.name.startsWith('.') &&
+          // Sidecar annotation files belong to their source file, not to
+          // the reading list.
+          !isAnnotationFileName(entry.name) &&
+          /\.json$/i.test(entry.name)
+      )
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b))
   } catch {
+    currentFilePath = null
     return { status: 'error', fileName: basename(path), error: 'The folder could not be read.' }
   }
 
@@ -138,6 +180,7 @@ async function openFolderPath(path: string): Promise<OpenResponse> {
     await clearFolderSearchCache()
     await closeCurrentFile()
     currentFileName = null
+    currentFilePath = null
     currentFolderFiles = null
     return {
       status: 'error',
@@ -301,6 +344,128 @@ ipcMain.handle('json:search', (_event, query: unknown): Promise<SearchResponse> 
 })
 
 ipcMain.handle('json:get-version', (): string => app.getVersion())
+
+/** Resolves the annotation target: a folder file by index, or the open single file. */
+function annotationTargetPath(fileIndex: number | null): string | null {
+  if (fileIndex !== null) {
+    const files = currentFolderFiles
+    if (!files || !Number.isInteger(fileIndex) || fileIndex < 0 || fileIndex >= files.length) return null
+    return files[fileIndex]
+  }
+  return currentFilePath
+}
+
+/**
+ * Computes where an annotation points in the file: the 1-based line, the
+ * absolute byte offset, and a raw excerpt of the annotated value. Returns
+ * an error message instead when the location cannot be determined.
+ */
+async function locateAnnotationTarget(
+  sourcePath: string,
+  itemIndex: number | null,
+  path: JsonPath | null
+): Promise<{ line: number | null; byteOffset: number | null; snippet: string | null } | string> {
+  if (itemIndex !== null) {
+    // The open file already has every element's range; anything else is
+    // opened (and closed) just for this lookup.
+    const file = currentFile?.filePath === sourcePath ? currentFile : await JsonFile.open(sourcePath).catch(() => null)
+    if (!file) return 'The file could not be read.'
+    try {
+      if (file.root.type !== 'array') return 'The file is not a JSON array.'
+      let text: string
+      try {
+        text = await file.elementText(itemIndex)
+      } catch {
+        return 'The annotated item does not exist in this file.'
+      }
+      const range = locateValue(text, path ?? [])
+      if (!range) return 'The annotated location does not exist in this file.'
+      return {
+        line: file.elementStartLine(itemIndex) + lineAt(text, range.start) - 1,
+        byteOffset: file.elementStartByte(itemIndex) + byteOffsetAt(text, range.start),
+        snippet: excerpt(text.slice(range.start, range.end))
+      }
+    } finally {
+      if (file !== currentFile) await file.close()
+    }
+  }
+
+  if (path !== null) {
+    // A value-root document: locate the path in the file's own text.
+    const { size } = await stat(sourcePath).catch(() => ({ size: Infinity }))
+    if (size > MAX_ANNOTATION_TARGET_BYTES) return 'This file is too large to annotate.'
+    const text = await readFile(sourcePath, 'utf8').catch(() => null)
+    if (text === null) return 'The file could not be read.'
+    const range = locateValue(text, path)
+    if (!range) return 'The annotated location does not exist in this file.'
+    return {
+      line: lineAt(text, range.start),
+      byteOffset: byteOffsetAt(text, range.start),
+      snippet: excerpt(text.slice(range.start, range.end))
+    }
+  }
+
+  // The file (or an unreadable item) as a whole: no finer location exists.
+  return { line: null, byteOffset: null, snippet: null }
+}
+
+async function respondWithAnnotations(
+  sourcePath: string,
+  mutate: (list: AnnotationList) => AnnotationList
+): Promise<AnnotationsResponse> {
+  const sidecarPath = annotationFilePathFor(sourcePath)
+  try {
+    const list = await queueSidecarWrite(sidecarPath, async () => {
+      const next = mutate(await readAnnotationList(sidecarPath, basename(sourcePath)))
+      await writeAnnotationList(sidecarPath, next)
+      return next
+    })
+    return { status: 'ok', annotations: list.annotations }
+  } catch {
+    return { status: 'error', message: 'The annotation could not be saved.' }
+  }
+}
+
+ipcMain.handle('json:get-annotations', (_event, fileIndex: unknown): Promise<AnnotationsResponse> => {
+  const fields = parseAnnotationRequest({ fileIndex })
+  const sourcePath = fields && annotationTargetPath(fields.fileIndex)
+  if (!fields || !sourcePath) {
+    return Promise.resolve({ status: 'error', message: 'No file is open.' })
+  }
+  return readAnnotationList(annotationFilePathFor(sourcePath), basename(sourcePath)).then((list) => ({
+    status: 'ok' as const,
+    annotations: list.annotations
+  }))
+})
+
+ipcMain.handle('json:add-annotation', async (_event, request: unknown): Promise<AnnotationsResponse> => {
+  const fields = parseAnnotationRequest(request)
+  const rawMessage = (request as { message?: unknown } | null)?.message
+  if (!fields || typeof rawMessage !== 'string') {
+    return { status: 'error', message: 'The annotation request is invalid.' }
+  }
+  const sourcePath = annotationTargetPath(fields.fileIndex)
+  if (!sourcePath) return { status: 'error', message: 'No file is open.' }
+  const located = await locateAnnotationTarget(sourcePath, fields.itemIndex, fields.path)
+  if (typeof located === 'string') return { status: 'error', message: located }
+  // An error annotation records the message; a value annotation falls back
+  // to the value's own text when the reader sent no note.
+  const message = rawMessage.trim() || located.snippet || ''
+  if (!message) return { status: 'error', message: 'An annotation needs a message.' }
+  const annotation: Annotation = newAnnotation({ itemIndex: fields.itemIndex, path: fields.path, ...located, message })
+  return respondWithAnnotations(sourcePath, (list) => withAnnotation(list, annotation))
+})
+
+ipcMain.handle('json:remove-annotation', async (_event, request: unknown): Promise<AnnotationsResponse> => {
+  const fields = parseAnnotationRequest(request)
+  if (!fields) return { status: 'error', message: 'The annotation request is invalid.' }
+  const sourcePath = annotationTargetPath(fields.fileIndex)
+  if (!sourcePath) return { status: 'error', message: 'No file is open.' }
+  return respondWithAnnotations(sourcePath, (list) => {
+    const id = annotationIdAt(list, fields.itemIndex, fields.path)
+    return id ? withoutAnnotation(list, id) : list
+  })
+})
 
 void app.whenReady().then(() => {
   buildMenu()
