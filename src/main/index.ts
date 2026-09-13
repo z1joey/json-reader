@@ -155,22 +155,28 @@ async function openJsonFile(path: string): Promise<OpenFileResponse> {
  * Opens a folder whose top-level JSON files become the current folder.
  * A single JSON file is opened directly; multiple files get a sidebar.
  */
+/**
+ * Orders a folder's files for the reading list: plain name order, except
+ * that a sidecar annotation file sits directly after the file it belongs
+ * to, so a file and its annotations stay adjacent — and no file changes
+ * position when a first annotation creates its sidecar mid-session.
+ */
+export function compareFileWithSidecars(a: string, b: string): number {
+  const sortKey = (name: string): string => name.replace(/\.annotations\.json$/i, '.json')
+  const byKey = sortKey(a).localeCompare(sortKey(b))
+  if (byKey !== 0) return byKey
+  const bySidecar = (isAnnotationFileName(a) ? 1 : 0) - (isAnnotationFileName(b) ? 1 : 0)
+  return bySidecar || a.localeCompare(b)
+}
+
 async function openFolderPath(path: string): Promise<OpenResponse> {
   let names: string[]
   try {
     const entries = await readdir(path, { withFileTypes: true })
     names = entries
-      .filter(
-        (entry) =>
-          entry.isFile() &&
-          !entry.name.startsWith('.') &&
-          // Sidecar annotation files belong to their source file, not to
-          // the reading list.
-          !isAnnotationFileName(entry.name) &&
-          /\.json$/i.test(entry.name)
-      )
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && /\.json$/i.test(entry.name))
       .map((entry) => entry.name)
-      .sort((a, b) => a.localeCompare(b))
+      .sort(compareFileWithSidecars)
   } catch {
     currentFilePath = null
     return { status: 'error', fileName: basename(path), error: 'The folder could not be read.' }
@@ -409,6 +415,23 @@ async function locateAnnotationTarget(
   return { line: null, byteOffset: null, snippet: null }
 }
 
+/**
+ * Lists a sidecar that was just written in the open folder, right after
+ * its source file, so the panel can show it without reopening the folder.
+ * Returns the new file names, or null when there is nothing to add (no
+ * folder is open, or the sidecar is listed already).
+ */
+function listNewSidecar(sourcePath: string, sidecarPath: string): string[] | null {
+  const files = currentFolderFiles
+  if (!files || files.includes(sidecarPath)) return null
+  const sourceIndex = files.indexOf(sourcePath)
+  if (sourceIndex < 0) return null
+  const next = [...files]
+  next.splice(sourceIndex + 1, 0, sidecarPath)
+  currentFolderFiles = next
+  return next.map((file) => basename(file))
+}
+
 async function respondWithAnnotations(
   sourcePath: string,
   mutate: (list: AnnotationList) => AnnotationList
@@ -420,7 +443,7 @@ async function respondWithAnnotations(
       await writeAnnotationList(sidecarPath, next)
       return next
     })
-    return { status: 'ok', annotations: list.annotations }
+    return { status: 'ok', annotations: list.annotations, files: listNewSidecar(sourcePath, sidecarPath) ?? undefined }
   } catch {
     return { status: 'error', message: 'The annotation could not be saved.' }
   }

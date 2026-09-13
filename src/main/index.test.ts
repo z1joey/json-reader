@@ -276,15 +276,20 @@ describe('annotations', () => {
   }
 ]`
 
-  it('hides sidecar annotation files from the folder listing', async () => {
+  it('lists sidecar annotation files right after the file they belong to', async () => {
     const folder = await folderFixture('annotated-listing', {
-      'logs.json': '[1]',
       'logs.annotations.json': '{"version":1,"sourceFile":"logs.json","annotations":[]}',
+      'logs.json': '[1]',
+      'notes.annotations.json': '{"version":1,"sourceFile":"notes.json","annotations":[]}',
       'notes.json': '[2]'
     })
     pick(folder)
     const result = await openFolder()
-    expect(result).toEqual({ status: 'folder', folderName: 'annotated-listing', files: ['logs.json', 'notes.json'] })
+    expect(result).toEqual({
+      status: 'folder',
+      folderName: 'annotated-listing',
+      files: ['logs.json', 'logs.annotations.json', 'notes.json', 'notes.annotations.json']
+    })
   })
 
   it('starts with no annotations for a fresh file', async () => {
@@ -320,7 +325,31 @@ describe('annotations', () => {
     expect(sidecar).toMatchObject({ version: 1, sourceFile: 'logs.json' })
     expect((sidecar.annotations as unknown[]).length).toBe(1)
     // Loading the annotations again returns what was stored.
-    expect(await getAnnotations(0)).toEqual(result)
+    const reread = await getAnnotations(0)
+    expect(reread.status).toBe('ok')
+    if (reread.status !== 'ok') return
+    expect(reread.annotations).toEqual(result.annotations)
+  })
+
+  it('adds the sidecar of a first annotation to the open folder listing', async () => {
+    const folder = await folderFixture('annotations-appear', { 'a.json': '[{"msg": "boom"}]', 'b.json': '[2]' })
+    pick(folder)
+    await openFolder()
+    const result = await addAnnotation({ fileIndex: 0, itemIndex: 0, path: ['msg'], message: 'flagged' })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // The new sidecar is reported so the panel can show it without a reopen,
+    // right after its source file — every later file keeps its neighbors.
+    expect(result.files).toEqual(['a.json', 'a.annotations.json', 'b.json'])
+    // The sidecar is a readable JSON file of the folder, at its new index.
+    expect(await openFile(1)).toMatchObject({ status: 'ok', fileName: 'a.annotations.json' })
+    expect(await openFile(2)).toMatchObject({ status: 'ok', fileName: 'b.json' })
+    // A further annotation of the same file adds nothing to the listing.
+    const again = await addAnnotation({ fileIndex: 0, itemIndex: 0, path: null, message: 'whole item' })
+    expect(again.status).toBe('ok')
+    if (again.status !== 'ok') return
+    expect(again.files).toBeUndefined()
+    expect(await openFile(2)).toMatchObject({ status: 'ok', fileName: 'b.json' })
   })
 
   it('locates the annotated value exactly when items start on one line', async () => {

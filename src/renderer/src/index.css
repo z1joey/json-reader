@@ -493,14 +493,7 @@ kbd {
   gap: 4px;
 }
 
-/* The label row: key on the left, annotate control on the right. */
-.jv-key-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
+/* The small caps label above its value. */
 .jv-key {
   font-size: 11px;
   font-weight: 600;
@@ -508,6 +501,11 @@ kbd {
   text-transform: uppercase;
   color: var(--key);
   overflow-wrap: anywhere;
+}
+
+/* The value area anchors its annotate control at its top-right corner. */
+.jv-value {
+  position: relative;
 }
 
 .jv-string {
@@ -684,14 +682,8 @@ kbd {
   padding-right: 8px;
 }
 
-.jv-list > li > .annotate-control {
-  position: absolute;
-  right: 8px;
-  top: 0;
-}
-
-/* The per-entry control: invisible until the entry is hovered, except on
-   annotated entries where the ✕ stays available. */
+/* The per-entry control: invisible until the pointer is on the entry's
+   value; annotated entries keep their ✕ always available. */
 .annotate-control {
   flex: none;
   font: inherit;
@@ -707,8 +699,23 @@ kbd {
   transition: opacity 0.12s ease;
 }
 
-.jv-field:hover > .jv-key-row > .annotate-control,
-.jv-list > li:hover > .annotate-control,
+.jv-list > li > .annotate-control,
+.jv-value > .annotate-control {
+  position: absolute;
+  right: 8px;
+  top: 0;
+}
+
+.jv-value > .annotate-control {
+  right: 0;
+}
+
+/* The control shows only while the pointer is on the innermost hovered
+   entry's value: `:hover` also matches every enclosing entry, so the
+   `:has` guard keeps an outer entry's button hidden whenever a nested
+   entry is the one being pointed at. Keys never reveal a control. */
+.jv-value:hover:not(:has(.jv-field:hover, .jv-list > li:hover)) > .annotate-control,
+.jv-list > li:hover:not(:has(.jv-field:hover, .jv-list > li:hover)) > .annotate-control,
 .annotate-control:focus-visible,
 .annotate-control.remove {
   opacity: 1;

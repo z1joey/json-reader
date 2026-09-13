@@ -198,7 +198,11 @@ export default function App(): React.ReactElement {
         decision.kind === 'add'
           ? await jsonReader.addAnnotation({ ...request, message }).catch(() => null)
           : await jsonReader.removeAnnotation(request).catch(() => null)
-      if (result?.status === 'ok') setAnnotations(result.annotations)
+      if (result?.status !== 'ok') return
+      setAnnotations(result.annotations)
+      // A first annotation creates the file's sidecar; the response carries
+      // the grown folder listing so the panel shows it without a reopen.
+      if (result.files) setFolder((prev) => (prev ? { ...prev, files: result.files! } : prev))
     },
     [annotations]
   )

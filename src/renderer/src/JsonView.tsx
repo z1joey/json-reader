@@ -63,13 +63,11 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
           const annotated = annotation?.annotatedKeys.has(pathKey(fieldPath)) ?? false
           return (
             <div className={`jv-field${annotated ? ' jv-annotated' : ''}`} key={key}>
-              <div className="jv-key-row">
-                <div className="jv-key">{key === '' ? '""' : key}</div>
-                {annotation && (
-                  <AnnotateControl annotated={annotated} onToggle={() => annotation.onToggle(fieldPath)} />
-                )}
+              <div className="jv-key">{key === '' ? '""' : key}</div>
+              <div className="jv-value">
+                {annotation && <AnnotateControl annotated={annotated} onToggle={() => annotation.onToggle(fieldPath)} />}
+                {renderNode(entryValue, fieldPath, annotation)}
               </div>
-              <div className="jv-value">{renderNode(entryValue, fieldPath, annotation)}</div>
             </div>
           )
         })}
@@ -79,8 +77,9 @@ function renderNode(value: unknown, path: JsonPath, annotation?: AnnotationView)
 }
 
 /**
- * The per-entry annotate control: hidden until the entry is hovered, then
- * an "Annotate" action — or a persistent ✕ on an already annotated entry.
+ * The per-entry annotate control: appears while the pointer is on the
+ * entry's value — never on its key — and stays visible as a ✕ on an
+ * already annotated entry.
  */
 function AnnotateControl({ annotated, onToggle }: { annotated: boolean; onToggle: () => void }): ReactNode {
   return (

@@ -114,7 +114,17 @@ export type RemoveAnnotationRequest = {
 }
 
 export type AnnotationsResponse =
-  | { status: 'ok'; annotations: Annotation[] }
+  | {
+      status: 'ok'
+      annotations: Annotation[]
+      /**
+       * Set when this request just created the source file's sidecar and
+       * the folder listing grew to include it (placed right after the
+       * source file): the file panel should adopt this list. Absent
+       * whenever the listing did not change.
+       */
+      files?: string[]
+    }
   | { status: 'error'; message: string }
 
 export interface JsonReaderApi {
