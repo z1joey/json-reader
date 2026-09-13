@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
+import type { AnnotationsResponse, OpenFileResponse, OpenResponse, SearchResponse } from '../shared/types'
 
 // Electron is replaced wholesale: only the pieces index.ts touches exist,
 // and the dialog is driven by each test. The file system stays real, so
@@ -75,6 +75,16 @@ const openFile = (index: number): Promise<OpenFileResponse> =>
   handlers.get('json:open-file')!(undefined, index) as Promise<OpenFileResponse>
 const search = (query: string): Promise<SearchResponse> =>
   handlers.get('json:search')!(undefined, query) as Promise<SearchResponse>
+const getAnnotations = (fileIndex: number | null): Promise<AnnotationsResponse> =>
+  handlers.get('json:get-annotations')!(undefined, fileIndex) as Promise<AnnotationsResponse>
+const addAnnotation = (request: unknown): Promise<AnnotationsResponse> =>
+  handlers.get('json:add-annotation')!(undefined, request) as Promise<AnnotationsResponse>
+const removeAnnotation = (request: unknown): Promise<AnnotationsResponse> =>
+  handlers.get('json:remove-annotation')!(undefined, request) as Promise<AnnotationsResponse>
+
+async function readSidecar(folder: string, sourceName: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(join(folder, sourceName.replace(/\.json$/i, '') + '.annotations.json'), 'utf8'))
+}
 
 describe('open folder', () => {
   it('only registers the folder-opening dialog flow', () => {
@@ -251,5 +261,264 @@ describe('open folder', () => {
     expect(second.status).toBe('ok')
     if (second.status !== 'ok') return
     expect(second.hits.some((hit) => hit.fileName === 'c.json')).toBe(true)
+  })
+})
+
+describe('annotations', () => {
+  // Lines are numbered so annotation locations are predictable:
+  // the "error" value of item 2 sits on line 6.
+  const logJson = `[
+  {"id": 1},
+  {
+    "id": 2,
+    "status": "failed",
+    "error": "connection refused"
+  }
+]`
+
+  it('lists sidecar annotation files right after the file they belong to', async () => {
+    const folder = await folderFixture('annotated-listing', {
+      'logs.annotations.json': '{"version":1,"sourceFile":"logs.json","annotations":[]}',
+      'logs.json': '[1]',
+      'notes.annotations.json': '{"version":1,"sourceFile":"notes.json","annotations":[]}',
+      'notes.json': '[2]'
+    })
+    pick(folder)
+    const result = await openFolder()
+    expect(result).toEqual({
+      status: 'folder',
+      folderName: 'annotated-listing',
+      files: ['logs.json', 'logs.annotations.json', 'notes.json', 'notes.annotations.json']
+    })
+  })
+
+  it('starts with no annotations for a fresh file', async () => {
+    const folder = await folderFixture('annotations-fresh', { 'a.json': '[1]', 'b.json': '[2]' })
+    pick(folder)
+    await openFolder()
+    const result = await getAnnotations(0)
+    expect(result).toEqual({ status: 'ok', annotations: [] })
+  })
+
+  it('records a value annotation with its line, byte offset and snippet', async () => {
+    const folder = await folderFixture('annotations-value', { 'logs.json': logJson, 'other.json': '[1]' })
+    pick(folder)
+    await openFolder()
+    const result = await addAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'], message: 'The service never answered.' })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.annotations).toHaveLength(1)
+    const [annotation] = result.annotations
+    expect(annotation).toMatchObject({
+      itemIndex: 1,
+      path: ['error'],
+      line: 6,
+      snippet: '"connection refused"',
+      message: 'The service never answered.'
+    })
+    expect(annotation.byteOffset).toBeGreaterThan(0)
+    expect(annotation.id).toBeTruthy()
+    expect(annotation.createdAt).toBeTruthy()
+
+    // The sidecar sits next to the source file and holds the same data.
+    const sidecar = await readSidecar(folder, 'logs.json')
+    expect(sidecar).toMatchObject({ version: 1, sourceFile: 'logs.json' })
+    expect((sidecar.annotations as unknown[]).length).toBe(1)
+    // Loading the annotations again returns what was stored.
+    const reread = await getAnnotations(0)
+    expect(reread.status).toBe('ok')
+    if (reread.status !== 'ok') return
+    expect(reread.annotations).toEqual(result.annotations)
+  })
+
+  it('adds the sidecar of a first annotation to the open folder listing', async () => {
+    const folder = await folderFixture('annotations-appear', { 'a.json': '[{"msg": "boom"}]', 'b.json': '[2]' })
+    pick(folder)
+    await openFolder()
+    const result = await addAnnotation({ fileIndex: 0, itemIndex: 0, path: ['msg'], message: 'flagged' })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // The new sidecar is reported so the panel can show it without a reopen,
+    // right after its source file — every later file keeps its neighbors.
+    expect(result.files).toEqual(['a.json', 'a.annotations.json', 'b.json'])
+    // The sidecar is a readable JSON file of the folder, at its new index.
+    expect(await openFile(1)).toMatchObject({ status: 'ok', fileName: 'a.annotations.json' })
+    expect(await openFile(2)).toMatchObject({ status: 'ok', fileName: 'b.json' })
+    // A further annotation of the same file adds nothing to the listing.
+    const again = await addAnnotation({ fileIndex: 0, itemIndex: 0, path: null, message: 'whole item' })
+    expect(again.status).toBe('ok')
+    if (again.status !== 'ok') return
+    expect(again.files).toBeUndefined()
+    expect(await openFile(2)).toMatchObject({ status: 'ok', fileName: 'b.json' })
+  })
+
+  it('locates the annotated value exactly when items start on one line', async () => {
+    const folder = await folderFixture('annotations-inline', {
+      'inline.json': '[{"id": 1, "msg": "boom"}, {"id": 2, "msg": "fine"}]',
+      'other.json': '[1]'
+    })
+    pick(folder)
+    await openFolder()
+    const result = await addAnnotation({ fileIndex: 0, itemIndex: 0, path: ['msg'], message: '' })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // No note was sent, so the value's own text becomes the message.
+    expect(result.annotations[0]).toMatchObject({ line: 1, snippet: '"boom"', message: '"boom"' })
+  })
+
+  it('annotates a whole item without a path', async () => {
+    const folder = await folderFixture('annotations-item', { 'logs.json': logJson, 'other.json': '[1]' })
+    pick(folder)
+    await openFolder()
+    const result = await addAnnotation({
+      fileIndex: 0,
+      itemIndex: 1,
+      path: null,
+      message: 'Item 2 is not valid JSON: unexpected token.'
+    })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // The item's own start line is the finest location available, and the
+    // whole element text becomes its excerpt.
+    expect(result.annotations[0]).toMatchObject({ itemIndex: 1, path: null, line: 3 })
+  })
+
+  it('annotates an item that failed to parse in the viewer', async () => {
+    const folder = await folderFixture('annotations-broken-item', {
+      'broken.json': '[{"ok": 1}, {"broken": }]',
+      'other.json': '[1]'
+    })
+    pick(folder)
+    await openFolder()
+    const opened = await openFile(0)
+    expect(opened.status).toBe('ok')
+    const item = await handlers.get('json:get-item')!(undefined, 1)
+    expect(item).toMatchObject({ status: 'error' })
+    const result = await addAnnotation({ fileIndex: 0, itemIndex: 1, path: null, message: 'Bad element in the dump.' })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.annotations[0]).toMatchObject({ itemIndex: 1, path: null, line: 1 })
+  })
+
+  it('annotates a file that failed to open, marking the error annotatable', async () => {
+    const folder = await folderFixture('annotations-broken-file', { 'broken.json': '{not json' })
+    pick(folder)
+    const result = await openFolder()
+    // A single broken file is opened directly and fails.
+    expect(result).toMatchObject({ status: 'error', fileName: 'broken.json', annotatable: true })
+    const saved = await addAnnotation({ fileIndex: null, itemIndex: null, path: null, message: 'Invalid JSON at line 1.' })
+    expect(saved).toEqual({
+      status: 'ok',
+      annotations: [expect.objectContaining({ itemIndex: null, path: null, line: null, message: 'Invalid JSON at line 1.' })]
+    })
+  })
+
+  it('reports errors for impossible annotation targets', async () => {
+    const folder = await folderFixture('annotations-errors', { 'a.json': '[1]', 'b.json': '{"k": "v"}' })
+    pick(folder)
+    await openFolder()
+    await openFile(0)
+
+    // Out-of-range item.
+    expect(await addAnnotation({ fileIndex: 0, itemIndex: 9, path: null, message: 'x' })).toEqual({
+      status: 'error',
+      message: 'The annotated item does not exist in this file.'
+    })
+    // Path that does not exist in the item.
+    expect(await addAnnotation({ fileIndex: 0, itemIndex: 0, path: ['nope'], message: 'x' })).toEqual({
+      status: 'error',
+      message: 'The annotated location does not exist in this file.'
+    })
+    // A path inside a value-root file is fine; a bogus index on it is not.
+    expect(await addAnnotation({ fileIndex: 1, itemIndex: 0, path: null, message: 'x' })).toEqual({
+      status: 'error',
+      message: 'The file is not a JSON array.'
+    })
+    // Malformed requests.
+    expect((await addAnnotation(null)).status).toBe('error')
+    expect((await addAnnotation({ fileIndex: 0, itemIndex: 0, path: [{}], message: 'x' })).status).toBe('error')
+    expect((await addAnnotation({ fileIndex: 0, itemIndex: 0, path: null })).status).toBe('error')
+    // Nothing is written when a request fails.
+    expect(await getAnnotations(0)).toEqual({ status: 'ok', annotations: [] })
+  })
+
+  it('rejects annotations when no file backs the request', async () => {
+    // The suite's earlier tests leave files open, so only a folder index
+    // outside the opened folder proves the "nothing to annotate" path.
+    const folder = await folderFixture('annotations-no-file', { 'a.json': '[1]', 'b.json': '[2]' })
+    pick(folder)
+    await openFolder()
+    expect(await addAnnotation({ fileIndex: 5, itemIndex: 0, path: null, message: 'x' })).toEqual({
+      status: 'error',
+      message: 'No file is open.'
+    })
+    expect(await getAnnotations(5)).toEqual({ status: 'error', message: 'No file is open.' })
+    expect(await removeAnnotation({ fileIndex: 9, itemIndex: 0, path: null })).toEqual({
+      status: 'error',
+      message: 'No file is open.'
+    })
+    // A negative index is not a location probe at all — the request itself
+    // is malformed.
+    expect(await removeAnnotation({ fileIndex: -1, itemIndex: 0, path: null })).toEqual({
+      status: 'error',
+      message: 'The annotation request is invalid.'
+    })
+  })
+
+  it('replaces an existing annotation of the same location instead of duplicating it', async () => {
+    const folder = await folderFixture('annotations-dedupe', { 'logs.json': logJson, 'other.json': '[1]' })
+    pick(folder)
+    await openFolder()
+    await addAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'], message: 'first' })
+    const second = await addAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'], message: 'second' })
+    expect(second.status).toBe('ok')
+    if (second.status !== 'ok') return
+    expect(second.annotations).toHaveLength(1)
+    expect(second.annotations[0].message).toBe('second')
+  })
+
+  it('removes an annotation by location, tolerating unknown ones', async () => {
+    const folder = await folderFixture('annotations-remove', { 'logs.json': logJson, 'other.json': '[1]' })
+    pick(folder)
+    await openFolder()
+    await addAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'], message: 'flagged' })
+    const removed = await removeAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'] })
+    expect(removed).toEqual({ status: 'ok', annotations: [] })
+    // Removing a location that has none changes nothing.
+    expect(await removeAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'] })).toEqual({
+      status: 'ok',
+      annotations: []
+    })
+    const sidecar = await readSidecar(folder, 'logs.json')
+    expect(sidecar.annotations).toEqual([])
+  })
+
+  it('keeps annotations of the same file written concurrently', async () => {
+    const folder = await folderFixture('annotations-race', { 'logs.json': logJson, 'other.json': '[1]' })
+    pick(folder)
+    await openFolder()
+    const results = await Promise.all([
+      addAnnotation({ fileIndex: 0, itemIndex: 0, path: ['id'], message: 'one' }),
+      addAnnotation({ fileIndex: 0, itemIndex: 1, path: ['error'], message: 'two' })
+    ])
+    for (const result of results) expect(result.status).toBe('ok')
+    const stored = await getAnnotations(0)
+    expect(stored.status).toBe('ok')
+    if (stored.status !== 'ok') return
+    expect(stored.annotations.map((annotation) => annotation.message).sort()).toEqual(['one', 'two'])
+  })
+
+  it('annotates the single open file when no folder is open', async () => {
+    const folder = await folderFixture('annotations-single', {
+      'only.json': '{\n  "note": "odd value"\n}'
+    })
+    pick(folder)
+    const result = await openFolder()
+    expect(result).toMatchObject({ status: 'ok', fileName: 'only.json' })
+    const saved = await addAnnotation({ fileIndex: null, itemIndex: null, path: ['note'], message: 'check this' })
+    expect(saved.status).toBe('ok')
+    if (saved.status !== 'ok') return
+    expect(saved.annotations[0]).toMatchObject({ itemIndex: null, path: ['note'], line: 2, snippet: '"odd value"' })
+    expect(await getAnnotations(null)).toEqual(saved)
   })
 })

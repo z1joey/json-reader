@@ -413,6 +413,48 @@ describe('non-array roots', () => {
   })
 })
 
+describe('element locations', () => {
+  it('records the byte offset and start line of every element', async () => {
+    const path = await fixture('located.json', `[\n  {"id": 1},\n  {"id": 2}\n]`)
+    const file = await JsonFile.open(path)
+    // The first element starts on line 2; the second shares line 3.
+    expect(file.elementStartLine(0)).toBe(2)
+    expect(file.elementStartLine(1)).toBe(3)
+    const text = await file.elementText(1)
+    expect(JSON.parse(text)).toEqual({ id: 2 })
+    // The recorded byte offset points at the element's own first byte.
+    expect(await file.elementText(0)).toBe('{"id": 1}')
+    expect(file.elementStartByte(1)).toBeGreaterThan(file.elementStartByte(0))
+    await file.close()
+  })
+
+  it('keeps element lines correct across multibyte content and tiny chunks', async () => {
+    const emoji = '\u{1F34E}'
+    const path = await fixture('located-chunks.json', `[\n"${emoji}",\n"${emoji}"\n]`)
+    const file = await JsonFile.open(path, { chunkSize: 3 })
+    expect(file.elementStartLine(0)).toBe(2)
+    expect(file.elementStartLine(1)).toBe(3)
+    expect(await file.elementText(1)).toBe(`"${emoji}"`)
+    await file.close()
+  })
+
+  it('reports the file path it was opened from', async () => {
+    const path = await fixture('named.json', '[1]')
+    const file = await JsonFile.open(path)
+    expect(file.filePath).toBe(path)
+    await file.close()
+  })
+
+  it('rejects location probes with out-of-range indexes', async () => {
+    const path = await fixture('located-range.json', '[1]')
+    const file = await JsonFile.open(path)
+    expect(() => file.elementStartLine(1)).toThrow(/range/)
+    expect(() => file.elementStartByte(-1)).toThrow(/range/)
+    await expect(file.elementText(5)).rejects.toThrow(/range/)
+    await file.close()
+  })
+})
+
 describe('invalid input', () => {
   it('reports the line of an invalid primitive element', async () => {
     const path = await fixture('bad-primitive.json', '[\n  1,\n  2,\n  oops\n]')

@@ -202,14 +202,17 @@ export class JsonFile {
   private fd: FileHandle | null = null
   private starts: number[] = []
   private ends: number[] = []
+  // The 1-based line where each top-level element starts, recorded during
+  // the same structural scan that finds the byte ranges (no extra reads).
+  private elementLines: number[] = []
   private rootValue: unknown
   private rootIsArray = false
   private searchMemo: { query: string; indices: number[]; moreAvailable: boolean } | null = null
 
-  private constructor() {}
+  private constructor(readonly filePath: string) {}
 
   static async open(path: string, options: { chunkSize?: number } = {}): Promise<JsonFile> {
-    const file = new JsonFile()
+    const file = new JsonFile(path)
     let handle: FileHandle
     try {
       handle = await fsOpen(path, 'r')
@@ -240,14 +243,39 @@ export class JsonFile {
 
   async item(index: number): Promise<unknown> {
     if (!this.rootIsArray || !this.fd) throw new JsonError('The file is no longer open.')
-    if (!Number.isInteger(index) || index < 0 || index >= this.starts.length) {
-      throw new JsonError('The item index is out of range.')
-    }
+    this.requireElementIndex(index)
     const buffer = await this.readSlice(this.starts[index], this.ends[index])
     try {
       return JSON.parse(buffer.toString('utf8'))
     } catch (err) {
       throw new JsonError(`Item ${index + 1} is not valid JSON: ${errorMessage(err)}`)
+    }
+  }
+
+  /** The raw JSON text of one top-level element. */
+  async elementText(index: number): Promise<string> {
+    if (!this.rootIsArray || !this.fd) throw new JsonError('The file is no longer open.')
+    this.requireElementIndex(index)
+    return (await this.readSlice(this.starts[index], this.ends[index])).toString('utf8')
+  }
+
+  /** The absolute byte offset where a top-level element starts. */
+  elementStartByte(index: number): number {
+    if (!this.rootIsArray) throw new JsonError('Element locations need a JSON array file.')
+    this.requireElementIndex(index)
+    return this.starts[index]
+  }
+
+  /** The 1-based line in the file where a top-level element starts. */
+  elementStartLine(index: number): number {
+    if (!this.rootIsArray) throw new JsonError('Element locations need a JSON array file.')
+    this.requireElementIndex(index)
+    return this.elementLines[index]
+  }
+
+  private requireElementIndex(index: number): void {
+    if (!Number.isInteger(index) || index < 0 || index >= this.starts.length) {
+      throw new JsonError('The item index is out of range.')
     }
   }
 
@@ -366,9 +394,10 @@ export class JsonFile {
     }
   }
 
-  private addElement(start: number, end: number): void {
+  private addElement(start: number, end: number, line: number): void {
     this.starts.push(start)
     this.ends.push(end)
+    this.elementLines.push(line)
   }
 
   /**
@@ -391,8 +420,8 @@ export class JsonFile {
     const stack: number[] = [] // expected closing byte for each open container
     let state: 'none' | 'primitive' | 'container' | 'string' = 'none'
     let elemStart = 0
+    let elemLine = 1
     let primPreview = ''
-    let primLine = 1
     let needComma = false
     let elementDone = false
     let inString = false
@@ -409,16 +438,16 @@ export class JsonFile {
     const finishPrimitive = (end: number): void => {
       const text = primPreview.trim()
       if (text.length <= MAX_PRIMITIVE_PREVIEW && !PRIMITIVE_RE.test(text)) {
-        throw new JsonError(`Invalid JSON at line ${primLine}.`)
+        throw new JsonError(`Invalid JSON at line ${elemLine}.`)
       }
-      this.addElement(elemStart, end)
+      this.addElement(elemStart, end, elemLine)
       state = 'none'
       if (mode === 'array') needComma = true
       else elementDone = true
     }
 
     const finishElement = (end: number): void => {
-      this.addElement(elemStart, end)
+      this.addElement(elemStart, end, elemLine)
       state = 'none'
       if (mode === 'array') needComma = true
       else elementDone = true
@@ -454,18 +483,20 @@ export class JsonFile {
             } else if (byte === QUOTE) {
               state = 'string'
               elemStart = pos
+              elemLine = line
               inString = true
             } else if (byte === OPEN_BRACE) {
               state = 'container'
               elemStart = pos
+              elemLine = line
               stack.push(CLOSE_BRACE)
             } else if (byte === CLOSE_BRACKET || byte === CLOSE_BRACE) {
               fail()
             } else {
               state = 'primitive'
               elemStart = pos
+              elemLine = line
               primPreview = String.fromCharCode(byte)
-              primLine = line
             }
           }
         } else if (byte === QUOTE) {
@@ -473,6 +504,7 @@ export class JsonFile {
             if (needComma || state === 'primitive' || elementDone) fail()
             state = 'string'
             elemStart = pos
+            elemLine = line
           }
           inString = true
         } else if (byte === OPEN_BRACKET || byte === OPEN_BRACE) {
@@ -480,6 +512,7 @@ export class JsonFile {
             if (needComma || state === 'primitive' || elementDone) fail()
             state = 'container'
             elemStart = pos
+            elemLine = line
           }
           stack.push(byte === OPEN_BRACKET ? CLOSE_BRACKET : CLOSE_BRACE)
         } else if (byte === CLOSE_BRACKET || byte === CLOSE_BRACE) {
@@ -516,8 +549,8 @@ export class JsonFile {
               if (needComma) fail() // a second element without a separating comma
               state = 'primitive'
               elemStart = pos
+              elemLine = line
               primPreview = String.fromCharCode(byte)
-              primLine = line
             }
           }
         }
