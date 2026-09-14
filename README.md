@@ -12,7 +12,7 @@ dumps, logs, datasets — are shown one item at a time with keyboard paging, so
 even multi-gigabyte files open instantly. Every other JSON value is rendered
 as a structured, human-readable document.
 
-![JSON Reader with a folder of dictionary files open: the sidebar lists the folder's JSON files, a nested entry is rendered with foldable groups, and the pager shows item 99 of 2,077](assets/screenshot.png)
+![JSON Reader with a folder of dictionary files open: the header carries icon tools for collapsing the sidebar and fullscreen reading, the sidebar lists the folder's JSON files, a nested entry is rendered with foldable groups, and the pager shows item 1 of 4,879](assets/screenshot.png)
 
 ## Highlights
 
@@ -21,8 +21,8 @@ as a structured, human-readable document.
   an element is read and parsed only when you page to it. Navigating never
   re-reads the file, and memory stays flat no matter the file size.
 - **Folder reading.** `⌘/Ctrl+O` opens a folder; its top-level `.json` files
-  are listed in a sidebar, and `↑/↓` switch between them. A folder with a
-  single JSON file behaves like a plain file open.
+  are listed in a collapsible sidebar to click through, and search finds
+  files too. A folder with a single JSON file behaves like a plain file open.
 - **Search that ranks.** Case-insensitive search across every JSON file in
   the opened folder, ranked by match quality: exact string values first, then
   value prefixes, then any occurrence. Results show the file, the enclosing
@@ -33,16 +33,20 @@ as a structured, human-readable document.
   fails to load — and the location is recorded in a sidecar
   `<file>.annotations.json` next to the source: the array item, the JSON
   path, the line, the byte offset, and a raw excerpt of the value. Each
-  source file gets its own sidecar, sidecars never appear in the file list,
-  annotated spots stay highlighted in the reader, and pressing the control
-  again removes the annotation.
+  source file gets its own sidecar, which is listed right after its source
+  file once it exists, annotated spots stay highlighted in the reader, and
+  pressing the control again removes the annotation.
+- **Fullscreen reading.** The header's expand icon fills the screen with the
+  document alone — no sidebar, no header, no pager. The keyboard keeps
+  working: `←/→` page items, `↑/↓` scrolls, `Esc` returns.
 - **A reader, not an editor.** Objects read as label/value entries, arrays as
   numbered lists, and nested groups fold behind a count summary — unusually
   large groups start collapsed so an item opens as a readable overview
   instead of a wall. Very long strings are truncated with a *Show all*
   button.
-- **Keyboard-first.** Page through items, jump to an item by number, switch
-  files, and search without touching the mouse.
+- **Keyboard-first.** Page through items, jump to an item by number, scroll
+  the document, and search without leaving the keyboard; files are picked in
+  the sidebar or through search.
 - **Native and quiet.** Light/dark follows the system setting; the renderer
   is sandboxed with context isolation on and a strict content security
   policy. All file access lives in the main process.
@@ -73,9 +77,10 @@ Alternatively, use **Open Anyway** in System Settings → Privacy & Security.
 | `⌘/Ctrl+O` | Open a folder |
 | `⌘/Ctrl+F` | Focus search |
 | `←` / `→` , `PageUp` / `PageDown` | Previous / next array item |
-| `↑` / `↓` | Previous / next file in the opened folder |
+| `↑` / `↓` | Scroll the document |
 | type a number, `Enter` | Jump to that array item |
 | `↑` / `↓` , `Enter` , `Esc` | Navigate / pick / dismiss search results |
+| `Esc` | Exit fullscreen reading |
 
 ## Development
 
@@ -101,11 +106,12 @@ npm run typecheck
   (`openFolder`, `openFile`, `getItem`, `search`, `onOpenFolderRequested`)
   over `contextBridge`, with `contextIsolation: true`, `nodeIntegration:
   false`, and `sandbox: true`.
-- **Renderer** (`src/renderer`) — React app; renders the current value only.
-  Search is folder-aware: results can come from any JSON file in the opened
-  folder, and selecting a result jumps to that file. Annotations are stored
-  by the main process in sidecar files; the renderer only decides where the
-  reader clicked.
+- **Renderer** (`src/renderer`) — React app; renders the current value only,
+  along with the reading chrome: the collapsible sidebar, search, the pager,
+  and fullscreen reading mode. Search is folder-aware: results can come from
+  any JSON file in the opened folder, and selecting a result jumps to that
+  file. Annotations are stored by the main process in sidecar files; the
+  renderer only decides where the reader clicked.
 - **Shared** (`src/shared`) — IPC response shapes used by both sides.
 
 ### CI and releases

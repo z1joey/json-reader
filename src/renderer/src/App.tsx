@@ -7,9 +7,7 @@ import FilePanel from './FilePanel'
 import ItemPosition from './ItemPosition'
 import { JsonView } from './JsonView'
 import SearchBar from './SearchBar'
-import { decideFileSwitch, latestRequestedIndex } from './fileSwitch'
 import { decideSearchSelect } from './searchSelect'
-
 type ItemState = { loading: true } | { value: unknown } | { error: string }
 
 type State =
@@ -34,6 +32,30 @@ type ErrorAnnotate = { annotated: boolean; onToggle: () => void }
 
 const isMac = navigator.platform.startsWith('Mac')
 
+/** How far `↑`/`↓` scroll the document per key press. */
+const CONTENT_SCROLL_STEP = 72
+
+/** Quiet stroke icons for the header tools (lucide-style, no dependency). */
+function PanelLeftIcon(): React.ReactElement {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M9 3v18" />
+    </svg>
+  )
+}
+
+function MaximizeIcon(): React.ReactElement {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+      <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+      <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+      <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+    </svg>
+  )
+}
+
 function fileNameOf(state: State): string | null {
   if (state.view === 'array' || state.view === 'value' || state.view === 'error') return state.fileName
   return null
@@ -45,13 +67,37 @@ export default function App(): React.ReactElement {
   // Annotations of the file currently shown; loaded when a file opens and
   // updated by every add/remove.
   const [annotations, setAnnotations] = useState<Annotation[]>([])
+  // The sidebar is a mouse affordance; the reader can fold it away.
+  const [filesHidden, setFilesHidden] = useState(false)
+  // Fullscreen reading: the window goes fullscreen and every piece of chrome
+  // is removed — the document alone remains, driven by the keyboard.
+  const [zen, setZen] = useState(false)
   const [version, setVersion] = useState('')
   useEffect(() => {
     void jsonReader.getVersion().then(setVersion)
   }, [])
   const stateRef = useRef(state)
   stateRef.current = state
+  const zenRef = useRef(zen)
+  zenRef.current = zen
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const contentRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    // Leaving fullscreen any way (Esc, ⌃⌘F) folds zen mode away with it.
+    const onFullscreenChange = (): void => {
+      if (!document.fullscreenElement) setZen(false)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [])
+  const enterZen = (): void => {
+    setZen(true)
+    void document.documentElement.requestFullscreen().catch(() => {})
+  }
+  const exitZen = (): void => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    setZen(false)
+  }
   // A file load is in flight; refs (not state) so rapid clicks read them
   // synchronously instead of waiting for a re-render.
   const loadingRef = useRef(false)
@@ -222,32 +268,27 @@ export default function App(): React.ReactElement {
         }
         return
       }
+      if (event.key === 'Escape') {
+        if (zenRef.current) {
+          event.preventDefault()
+          exitZen()
+        }
+        return
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return
       // Arrow keys typed inside the search field belong to it, not the pager.
       const tag = (event.target as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       const previous = event.key === 'ArrowLeft' || event.key === 'PageUp'
       const next = event.key === 'ArrowRight' || event.key === 'PageDown'
-      const filePrevious = event.key === 'ArrowUp'
-      const fileNext = event.key === 'ArrowDown'
-      if (!previous && !next && !filePrevious && !fileNext) return
-      // ↑/↓ switch between the files of the opened folder; they never page
-      // array items and do nothing unless a multi-file folder is open.
-      if (filePrevious || fileNext) {
-        // The queued request outranks the in-flight load, which outranks the
-        // last finished file — otherwise rapid presses collapse into one step.
-        const activeIndex = latestRequestedIndex(
-          pendingFolderIndexRef.current?.index ?? null,
-          loadingFolderIndexRef.current,
-          folder?.activeIndex
-        )
-        const decision = decideFileSwitch(
-          fileNext ? 'next' : 'previous',
-          folder ? { fileCount: folder.files.length, activeIndex } : null
-        )
-        if (decision.kind !== 'open') return
+      const scrollUp = event.key === 'ArrowUp'
+      const scrollDown = event.key === 'ArrowDown'
+      if (!previous && !next && !scrollUp && !scrollDown) return
+      // Files are picked with the mouse (or through search); `↑`/`↓` scroll
+      // the document that is on screen.
+      if (scrollUp || scrollDown) {
         event.preventDefault()
-        openFromFolder(decision.index)
+        contentRef.current?.scrollBy({ top: scrollDown ? CONTENT_SCROLL_STEP : -CONTENT_SCROLL_STEP })
         return
       }
       const current = stateRef.current
@@ -262,7 +303,7 @@ export default function App(): React.ReactElement {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [folder, openFromFolder, pickFolder])
+  }, [folder, pickFolder])
 
   // Fetch the current item; a stale reply for an older index is discarded.
   const arrayIndex = state.view === 'array' ? state.index : -1
@@ -313,20 +354,49 @@ export default function App(): React.ReactElement {
   const itemError = state.view === 'array' && 'error' in state.item ? state.item.error : ''
 
   return (
-    <div className="app">
-      <header className="header">
-        {(folder || (state.view === 'array' && state.count > 0)) && (
-          <SearchBar
-            key={folder ? `${folder.name}:${folder.files.join(',')}` : state.view === 'array' ? state.fileName : ''}
-            inputRef={searchInputRef}
-            onSelect={handleSearchSelect}
-          />
-        )}
-        {version && <span className="app-version">v{version}</span>}
-      </header>
+    <div className={`app${zen ? ' zen' : ''}`}>
+      {!zen && (
+        <header className="header">
+          {(folder || fileName) && (
+            <div className="header-tools">
+              {folder && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-pressed={!filesHidden}
+                  aria-label={filesHidden ? 'Show file list' : 'Hide file list'}
+                  title={filesHidden ? 'Show file list' : 'Hide file list'}
+                  onClick={() => setFilesHidden((hidden) => !hidden)}
+                >
+                  <PanelLeftIcon />
+                </button>
+              )}
+              {fileName && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Fullscreen reading"
+                  title="Fullscreen reading — no sidebar, no pager; Esc exits"
+                  onClick={enterZen}
+                >
+                  <MaximizeIcon />
+                </button>
+              )}
+            </div>
+          )}
+          {(folder || (state.view === 'array' && state.count > 0)) && (
+            <SearchBar
+              key={folder ? `${folder.name}:${folder.files.join(',')}` : state.view === 'array' ? state.fileName : ''}
+              inputRef={searchInputRef}
+              onSelect={handleSearchSelect}
+            />
+          )}
+          {version && <span className="app-version">v{version}</span>}
+        </header>
+      )}
 
       <div className="body">
-        {folder && (
+        {folder && !filesHidden && !zen && (
           <FilePanel
             name={folder.name}
             files={folder.files}
@@ -335,7 +405,7 @@ export default function App(): React.ReactElement {
           />
         )}
 
-        <main className="content">
+        <main className="content" ref={contentRef}>
           {state.view === 'empty' && <EmptyState onOpenFolder={() => void pickFolder()} />}
           {state.view === 'loading' && (
             <div className="center-state">
@@ -397,7 +467,7 @@ export default function App(): React.ReactElement {
         </main>
       </div>
 
-      {state.view === 'array' && state.count > 0 && (
+      {!zen && state.view === 'array' && state.count > 0 && (
         <footer className="footer">
           <button className="button" onClick={goPrevious} disabled={state.index === 0}>
             ← Previous
