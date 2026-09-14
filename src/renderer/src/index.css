@@ -91,6 +91,51 @@ body {
   margin-left: auto;
 }
 
+/* Icon tools at the header's left: sidebar toggle plus fullscreen. */
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.icon-button {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: var(--fg);
+  background: var(--panel);
+  border-color: var(--hairline-strong);
+}
+
+/* Pressed = the file list is currently shown. */
+.icon-button[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--panel);
+  border-color: var(--hairline-strong);
+}
+
+/* ── Fullscreen reading ─────────────────────────────────────────────── */
+
+/* Zen mode keeps only the document: the header, sidebar and pager are
+   removed from the tree, and the text gets a wider measure to breathe. */
+.app.zen .doc {
+  max-width: 820px;
+  padding: 48px 56px 96px;
+}
+
 /* ── Search ─────────────────────────────────────────────────────────── */
 
 /* The search field floats dead-center in the header, above the drag region. */
